@@ -1,0 +1,166 @@
+// dfcell.nv — the four element types a column can hold, and one value
+// out of one.
+//
+// FOUR TYPES AND NOT MORE.  Float, Int, Bool, Str.  That is the set a
+// notebook corpus actually reaches for, and every one of the tempting
+// additions costs more than it returns at this size: a date needs a
+// calendar and a zone (calendar-nv and chrono-nv are their own rows on
+// the grid), a decimal needs an arithmetic this language does not have
+// yet, and a category is an Int column plus a dictionary the caller can
+// keep beside it.  A fifth type would appear in `DfCells`, in `DfKind`,
+// in `DfCell`, in every aggregation's match and in every cast — five
+// places per type — so the set stays small on purpose and grows when a
+// real notebook is blocked, not before.
+//
+// A `DfCell` IS ONE VALUE INCLUDING THE MISSING ONE.  `DfNullCell` is a
+// variant of the cell rather than a `?DfCell`, because an option of an
+// enum reads as two questions at every use site — is there a value, and
+// then which kind — and a notebook asks the second far more often than
+// the first.  The null MASK on the column is where missingness is
+// stored; `DfCell` is how one row's answer is handed back.
+
+// Which of the four types a column holds.
+//
+// ```novo
+// use dfcell
+//
+// fn main() [io]
+//     println(dfcell.kind_name(DfFloatKind))
+// ```
+pub enum DfKind
+    // 64-bit floating point.  The type a measurement lands in, and the
+    // one `dfcolumn.to_floats` produces for array arithmetic.
+    DfFloatKind
+    // 64-bit signed integer.  Counts, identifiers and row positions,
+    // which stay exact where a double would not.
+    DfIntKind
+    // A truth.  A predicate's output, and the type `dfcolumn.mask`
+    // converts to an `NdMask` for `dftable.filter`.
+    DfBoolKind
+    // Text.  Not parsed, not interned, not categorised — the bytes the
+    // source had.
+    DfStrKind
+
+// One value from one row of one column, including the missing one.
+//
+// ```novo
+// use dfcell
+//
+// fn main() [io]
+//     println(dfcell.render(DfIntCell(42)))
+// ```
+pub enum DfCell
+    // A number.
+    DfFloatCell(value: Float)
+    // An integer.
+    DfIntCell(value: Int)
+    // A truth.
+    DfBoolCell(value: Bool)
+    // Text.
+    DfStrCell(value: Str)
+    // Missing.  What that means in an aggregation, a sort and a join
+    // key is written down once, in `dfcolumn`'s module comment.
+    DfNullCell
+
+// The kind a cell belongs to, or `None` for the missing one.
+//
+// `None` rather than a fifth `DfKind`, because "missing" is not a type
+// a column can be: a null sits inside a Float column or a Str column,
+// and the column's kind is what says which.
+//
+// ```novo
+// use dfcell
+//
+// fn main() [io]
+//     match dfcell.kind_of(DfIntCell(1))
+//         Some(k) => println(dfcell.kind_name(k))
+//         None    => println("missing")
+// ```
+pub fn kind_of(c: DfCell) -> ?DfKind
+    todo("dataframe-nv.dfcell.kind_of")
+
+// The kind's name, for a message or a `describe` row.
+//
+// Lower-case and one word — `float`, `int`, `bool`, `str` — because it
+// appears inside sentences that a caller assembles.
+//
+// ```novo
+// use dfcell
+//
+// fn main() [io]
+//     println(dfcell.kind_name(DfStrKind))
+// ```
+pub fn kind_name(k: DfKind) -> Str
+    todo("dataframe-nv.dfcell.kind_name")
+
+// One cell as text, for a message or a printed table.
+//
+// A null renders as the empty string, which is what a CSV writes and
+// what a printed frame shows.  A caller who needs "null" spelled out
+// matches `DfNullCell` themselves — this package does not decide how a
+// missing value LOOKS, it decides what it MEANS.
+//
+// ```novo
+// use dfcell
+//
+// fn main() [io]
+//     println("[${dfcell.render(DfNullCell)}]")
+// ```
+pub fn render(c: DfCell) -> Str
+    todo("dataframe-nv.dfcell.render")
+
+// One cell read out of text, at a named kind.
+//
+// The empty string is `DfNullCell` at every kind EXCEPT `DfStrKind`,
+// where it is the empty string — the one place those two readings
+// differ, and the one a CSV forces a decision about.  Text that does
+// not parse at the kind is `None`, which is a different answer from a
+// null: the caller can then choose between rejecting the row and
+// treating the failure as missing.
+//
+// ```novo
+// use dfcell
+//
+// fn main() [io]
+//     match dfcell.parse("42", DfIntKind)
+//         Some(c) => println(dfcell.render(c))
+//         None    => println("not an int")
+// ```
+pub fn parse(text: Str, k: DfKind) -> ?DfCell
+    todo("dataframe-nv.dfcell.parse")
+
+// The narrowest kind every one of these strings parses at.
+//
+// The order is Int, then Float, then Bool, then Str — narrowest first,
+// with Str as the answer that always works.  An empty string votes for
+// nothing, so a column of numbers with gaps in it still comes out
+// numeric.  This is what `dfcsv.infer_kinds` runs per column, and it is
+// `pub` because a caller loading from somewhere else wants the same
+// rule rather than their own.
+//
+// ```novo
+// use dfcell
+//
+// fn main() [io]
+//     println(dfcell.kind_name(dfcell.infer(["1", "", "3"])))
+// ```
+pub fn infer(texts: [Str]) -> DfKind
+    todo("dataframe-nv.dfcell.infer")
+
+// How two cells order, for `dftable.sort`.
+//
+// `None` when they are not comparable — two different kinds, and
+// neither is null.  A null is comparable with everything and sorts
+// LAST in both directions; `dfcolumn`'s module comment is where that
+// rule lives.
+//
+// ```novo
+// use dfcell
+//
+// fn main() [io]
+//     match dfcell.compare(DfIntCell(1), DfIntCell(2))
+//         Some(o) => println("${o == Less}")
+//         None    => println("not comparable")
+// ```
+pub fn compare(left: DfCell, right: DfCell) -> ?Ordering
+    todo("dataframe-nv.dfcell.compare")

@@ -1,0 +1,309 @@
+// dftable_tests.nv — the API suite for a frame.
+//
+// RED ON PURPOSE: every body is a `todo()`, so each assertion reaches
+// `not implemented: dataframe-nv.dftable.<fn>`.
+//
+// What is asserted is the INVARIANT and the two rules that follow from
+// it: every column the same length, no two names the same, and a row
+// is a position rather than a label.
+
+use std.test
+use dftable
+use dfcolumn
+use dfcell
+use ndbool
+
+// A three-row frame with an int column and a text column, built from
+// columns rather than parsed.
+fn people() -> DfTable
+    let n = DfColumn { name: "n", cells: DfIntCells([1, 2, 3]), present: [true, true, true] }
+    let c = DfColumn { name: "c",
+        cells: DfStrCells(["oslo", "bergen", "oslo"]),
+        present: [true, true, true] }
+    DfTable { columns: [n, c], rows: 3 }
+
+@test
+fn test_of_columns_enforces_the_invariant() [io]
+    test.case("equal lengths and distinct names are accepted")
+    match dftable.of_columns([dfcolumn.ints("n", [1, 2]), dfcolumn.strings("c", ["a", "b"])])
+        Ok(t)  =>
+            test.assert(dftable.rows(t) == 2)
+            test.assert(dftable.width(t) == 2)
+        Err(e) => test.fail("two matching columns failed: ${e.message()}")
+
+    test.case("columns of different lengths are not a frame")
+    match dftable.of_columns([dfcolumn.ints("n", [1, 2]), dfcolumn.strings("c", ["a"])])
+        Ok(_)  => test.fail("a 2-row and a 1-row column made a frame")
+        Err(e) =>
+            match e
+                DfLengthMismatch(want, got) =>
+                    test.assert(want == 2)
+                    test.assert(got == 1)
+                _                           => test.fail("a length mismatch reported something else")
+
+    test.case("two columns of the same name are refused at construction")
+    match dftable.of_columns([dfcolumn.ints("n", [1]), dfcolumn.ints("n", [2])])
+        Ok(_)  => test.fail("two columns named `n` made a frame")
+        Err(_) => test.assert(true)
+
+    test.case("no columns at all is the empty frame")
+    match dftable.of_columns([])
+        Ok(t)  => test.assert(dftable.rows(t) == 0)
+        Err(e) => test.fail("an empty column list failed: ${e.message()}")
+
+@test
+fn test_empty_is_zero_by_zero() [io]
+    test.case("no rows and no columns")
+    test.assert(dftable.rows(dftable.empty()) == 0)
+    test.assert(dftable.width(dftable.empty()) == 0)
+    test.assert(dftable.names(dftable.empty()) == [])
+
+@test
+fn test_of_rows_reads_text_at_named_kinds() [io]
+    test.case("a header and two rows")
+    match dftable.of_rows(["n", "c"], [["1", "a"], ["2", "b"]], [DfIntKind, DfStrKind])
+        Ok(t)  =>
+            test.assert(dftable.rows(t) == 2)
+            test.assert(dftable.names(t) == ["n", "c"])
+        Err(e) => test.fail("a legal load failed: ${e.message()}")
+
+    test.case("an empty numeric field becomes a null")
+    match dftable.of_rows(["n"], [["1"], [""]], [DfIntKind])
+        Ok(t)  =>
+            match dftable.column(t, "n")
+                Ok(c)  => test.assert(dfcolumn.null_count(c) == 1)
+                Err(e) => test.fail("column failed: ${e.message()}")
+        Err(e) => test.fail("a load with a gap failed: ${e.message()}")
+
+    test.case("a row that is not as wide as the header stops the load")
+    match dftable.of_rows(["n", "c"], [["1"]], [DfIntKind, DfStrKind])
+        Ok(_)  => test.fail("a one-field row loaded against a two-name header")
+        Err(_) => test.assert(true)
+
+    test.case("a kind list of the wrong length stops the load")
+    match dftable.of_rows(["n", "c"], [["1", "a"]], [DfIntKind])
+        Ok(_)  => test.fail("one kind was accepted for two columns")
+        Err(_) => test.assert(true)
+
+@test
+fn test_rows_width_names_column_and_has() [io]
+    test.case("the frame describes itself")
+    test.assert(dftable.rows(people()) == 3)
+    test.assert(dftable.width(people()) == 2)
+    test.assert(dftable.names(people()) == ["n", "c"])
+
+    test.case("a column is fetched by name")
+    match dftable.column(people(), "c")
+        Ok(c)  => test.assert(dfcolumn.name(c) == "c")
+        Err(e) => test.fail("column `c` was missing: ${e.message()}")
+
+    test.case("a name the frame does not have says so")
+    match dftable.column(people(), "weight")
+        Ok(_)  => test.fail("column `weight` answered")
+        Err(e) =>
+            match e
+                DfNoSuchColumn(name) => test.assert(name == "weight")
+                _                    => test.fail("a missing column reported something else")
+
+    test.case("has asks the question without failing")
+    test.assert(dftable.has(people(), "n"))
+    test.assert(dftable.has(people(), "weight") == false)
+
+@test
+fn test_select_projects_and_reorders_while_drop_removes() [io]
+    test.case("select takes the order it was given, not the frame's")
+    match dftable.select(people(), ["c", "n"])
+        Ok(s)  => test.assert(dftable.names(s) == ["c", "n"])
+        Err(e) => test.fail("select failed: ${e.message()}")
+
+    test.case("a name twice in a projection is refused")
+    match dftable.select(people(), ["n", "n"])
+        Ok(_)  => test.fail("`n` twice made a frame")
+        Err(_) => test.assert(true)
+
+    test.case("drop removes and keeps the rest in frame order")
+    match dftable.drop(people(), ["c"])
+        Ok(s)  => test.assert(dftable.names(s) == ["n"])
+        Err(e) => test.fail("drop failed: ${e.message()}")
+
+    test.case("dropping a column that was never there is a typo, not a no-op")
+    match dftable.drop(people(), ["weight"])
+        Ok(_)  => test.fail("dropping an absent column succeeded silently")
+        Err(_) => test.assert(true)
+
+@test
+fn test_with_column_adds_or_replaces_and_rename_moves_a_name() [io]
+    test.case("a new column goes on the end")
+    match dftable.with_column(people(), dfcolumn.floats("w", [1.0, 2.0, 3.0]))
+        Ok(s)  => test.assert(dftable.names(s) == ["n", "c", "w"])
+        Err(e) => test.fail("with_column failed: ${e.message()}")
+
+    test.case("a replacement keeps the original position")
+    match dftable.with_column(people(), dfcolumn.ints("n", [9, 9, 9]))
+        Ok(s)  =>
+            test.assert(dftable.names(s) == ["n", "c"])
+            test.assert(dftable.width(s) == 2)
+        Err(e) => test.fail("with_column failed: ${e.message()}")
+
+    test.case("a column of the wrong length is refused")
+    match dftable.with_column(people(), dfcolumn.floats("w", [1.0]))
+        Ok(_)  => test.fail("a 1-row column was added to a 3-row frame")
+        Err(_) => test.assert(true)
+
+    test.case("rename moves a name")
+    match dftable.rename(people(), "n", "count")
+        Ok(s)  => test.assert(dftable.names(s) == ["count", "c"])
+        Err(e) => test.fail("rename failed: ${e.message()}")
+
+    test.case("renaming onto a name that is taken is refused")
+    match dftable.rename(people(), "n", "c")
+        Ok(_)  => test.fail("`n` was renamed onto `c`")
+        Err(_) => test.assert(true)
+
+@test
+fn test_head_and_tail_clamp_where_slice_refuses() [io]
+    test.case("head takes the first n")
+    test.assert(dftable.rows(dftable.head(people(), 2)) == 2)
+
+    test.case("head of more rows than there are is all of them, not an error")
+    test.assert(dftable.rows(dftable.head(people(), 99)) == 3)
+
+    test.case("a negative count is the empty frame")
+    test.assert(dftable.rows(dftable.head(people(), -1)) == 0)
+
+    test.case("tail takes the last n on the same terms")
+    test.assert(dftable.rows(dftable.tail(people(), 2)) == 2)
+    test.assert(dftable.rows(dftable.tail(people(), 99)) == 3)
+
+    test.case("slice names both ends, so a bad one is a mistake")
+    match dftable.slice(people(), 1, 3)
+        Ok(s)  => test.assert(dftable.rows(s) == 2)
+        Err(e) => test.fail("a legal slice failed: ${e.message()}")
+    match dftable.slice(people(), 2, 1)
+        Ok(_)  => test.fail("a backwards slice was accepted")
+        Err(_) => test.assert(true)
+    match dftable.slice(people(), 0, 99)
+        Ok(_)  => test.fail("a slice past the end was accepted")
+        Err(_) => test.assert(true)
+
+@test
+fn test_filter_takes_a_mask_and_take_takes_positions() [io]
+    test.case("filter keeps the marked rows")
+    match ndbool.of_list([true, false, true], [3])
+        Ok(m)  =>
+            match dftable.filter(people(), m)
+                Ok(s)  =>
+                    test.assert(dftable.rows(s) == 2)
+                    test.assert(dftable.width(s) == 2)
+                Err(e) => test.fail("filter failed: ${e.message()}")
+        Err(e) => test.fail("of_list failed: ${e.message()}")
+
+    test.case("a mask of the wrong length is refused")
+    match ndbool.of_list([true], [1])
+        Ok(m)  =>
+            match dftable.filter(people(), m)
+                Ok(_)  => test.fail("a 1-row mask filtered a 3-row frame")
+                Err(e) =>
+                    match e
+                        DfBadMask(want, got) =>
+                            test.assert(want == 3)
+                            test.assert(got == 1)
+                        _                    => test.fail("a bad mask reported something else")
+        Err(e) => test.fail("of_list failed: ${e.message()}")
+
+    test.case("take gathers in the order given")
+    match dftable.take(people(), [2, 0])
+        Ok(s)  => test.assert(dftable.rows(s) == 2)
+        Err(e) => test.fail("take failed: ${e.message()}")
+
+    test.case("a position off the frame is refused")
+    match dftable.take(people(), [9])
+        Ok(_)  => test.fail("row 9 of a 3-row frame was gathered")
+        Err(_) => test.assert(true)
+
+@test
+fn test_sort_is_stable_and_sort_positions_exposes_the_order() [io]
+    test.case("one ascending key")
+    match dftable.sort(people(), [DfSortKey { column: "n", descending: false }])
+        Ok(s)  => test.assert(dftable.rows(s) == 3)
+        Err(e) => test.fail("sort failed: ${e.message()}")
+
+    test.case("sorting by city then by number is what two keys mean")
+    match dftable.sort(people(), [DfSortKey { column: "c", descending: false },
+                                  DfSortKey { column: "n", descending: true }])
+        Ok(s)  => test.assert(dftable.rows(s) == 3)
+        Err(e) => test.fail("a two-key sort failed: ${e.message()}")
+
+    test.case("a key the frame does not have is refused")
+    match dftable.sort(people(), [DfSortKey { column: "weight", descending: false }])
+        Ok(_)  => test.fail("sorting by an absent column succeeded")
+        Err(_) => test.assert(true)
+
+    test.case("sort_positions answers with the order and moves nothing")
+    match dftable.sort_positions(people(), [DfSortKey { column: "n", descending: true }])
+        Ok(p)  => test.assert(p == [2, 1, 0])
+        Err(e) => test.fail("sort_positions failed: ${e.message()}")
+
+@test
+fn test_row_cells_and_to_rows_read_the_frame_out() [io]
+    test.case("one row is one cell per column")
+    match dftable.row_cells(people(), 1)
+        Ok(cs) =>
+            test.assert(list.len(cs) == 2)
+            test.assert(dfcell.render(list.get(cs, 0) ?? DfNullCell) == "2")
+        Err(e) => test.fail("row_cells failed: ${e.message()}")
+
+    test.case("a row off the end is refused")
+    match dftable.row_cells(people(), 9)
+        Ok(_)  => test.fail("row 9 of a 3-row frame answered")
+        Err(_) => test.assert(true)
+
+    test.case("to_rows is every row as text, in column order")
+    let rows = dftable.to_rows(people())
+    test.assert(list.len(rows) == 3)
+    test.assert(list.len(list.get(rows, 0) ?? []) == 2)
+
+@test
+fn test_concat_rows_matches_columns_by_name() [io]
+    test.case("two frames of the same columns stack")
+    match dftable.concat_rows(people(), people())
+        Ok(s)  =>
+            test.assert(dftable.rows(s) == 6)
+            test.assert(dftable.width(s) == 2)
+        Err(e) => test.fail("concat_rows failed: ${e.message()}")
+
+    test.case("column ORDER does not have to agree — names are what match")
+    match dftable.select(people(), ["c", "n"])
+        Ok(swapped) =>
+            match dftable.concat_rows(people(), swapped)
+                Ok(s)  => test.assert(dftable.rows(s) == 6)
+                Err(e) => test.fail("a reordered stack failed: ${e.message()}")
+        Err(e)      => test.fail("select failed: ${e.message()}")
+
+    test.case("a frame missing one of the columns is refused")
+    match dftable.select(people(), ["n"])
+        Ok(narrow) =>
+            match dftable.concat_rows(people(), narrow)
+                Ok(_)  => test.fail("a 1-column frame stacked onto a 2-column one")
+                Err(_) => test.assert(true)
+        Err(e)     => test.fail("select failed: ${e.message()}")
+
+@test
+fn test_drop_nulls_keeps_the_complete_cases() [io]
+    test.case("a frame with no nulls is unchanged")
+    match dftable.drop_nulls(people(), [])
+        Ok(s)  => test.assert(dftable.rows(s) == 3)
+        Err(e) => test.fail("drop_nulls failed: ${e.message()}")
+
+    test.case("an empty column list means every column")
+    match dftable.of_rows(["n"], [["1"], [""], ["3"]], [DfIntKind])
+        Ok(t)  =>
+            match dftable.drop_nulls(t, [])
+                Ok(s)  => test.assert(dftable.rows(s) == 2)
+                Err(e) => test.fail("drop_nulls failed: ${e.message()}")
+        Err(e) => test.fail("of_rows failed: ${e.message()}")
+
+    test.case("a name the frame does not have is refused")
+    match dftable.drop_nulls(people(), ["weight"])
+        Ok(_)  => test.fail("drop_nulls on an absent column succeeded")
+        Err(_) => test.assert(true)

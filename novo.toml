@@ -1,0 +1,53 @@
+[package]
+name        = "dataframe-nv"
+version     = "0.0.1"
+description = "Named, typed columns over a shared length, and the operations a notebook performs on them: selection by name and by mask, head, tail and slice, with_column and drop, sort by several keys, group-by with count, sum, mean, min and max, an inner and a left join on one key, and describe.  Every column carries a null mask, and what a null does is written down once."
+
+license     = "Apache-2.0"
+
+# An INTERFACE release: every `pub fn` body is a `todo()`, so the
+# signatures and the effect rows are published and nothing is
+# implemented.  `novo pkg publish` recognises the shape and requires
+# both the draft stability and the 0.0.x version; the first
+# implementation is the 0.1.0 published over it.
+stability   = "draft"
+
+# `core`.  A frame is a list of columns and a column is a list of
+# values; nothing here reads a file, opens a connection or consults a
+# clock.  Loading a frame FROM somewhere is the host's job: it hands
+# this package rows it already holds.  No `@tier(embedded)` claim —
+# see README, "The layer, and why".
+layer       = "core"
+
+category    = "science"
+
+tags        = ["dataframe", "polars", "pandas", "columns", "groupby", "science"]
+repository  = "https://github.com/novolang/dataframe-nv"
+maintainers = ["novo-lang"]
+novo        = ">= 0.8.9"
+
+# A library: no `main`, so `novo pkg build` type-checks and
+# effect-checks every module under `src/` and writes no binary.
+
+[docs.pages]
+"README.md" = "Typed columns, a null mask, and what a notebook does with them"
+
+[dependencies]
+# The numeric bridge.  A column is NOT an ndarray — it has a name, a
+# null mask and four possible element types — but a NUMERIC column
+# converts to one, and that is where a notebook's arithmetic happens.
+# `filter` takes an `NdMask`, so the path from a comparison to a
+# selected frame is one this package does not have to reinvent.
+#
+# A sibling in the same interface lane, so it is a path here and the
+# coordinator converts it to `^0.0.1` at publish — a published package
+# depends on published packages.
+ndarray-nv = "^0.0.1"
+
+# The records a notebook loads first.  `dfcsv` is the whole of it: two
+# functions that turn csv-nv's `Header` and `Row` into a frame and
+# back.  The generic entry point beside it — `dftable.of_rows`, which
+# takes `[[Str]]` — serves a database rowset or a JSON array just as
+# well, so this dependency buys the CSV path being NAMED and TYPED
+# rather than the only path existing.
+csv-nv = "^0.1.1"

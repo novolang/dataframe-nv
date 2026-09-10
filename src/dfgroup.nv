@@ -1,0 +1,281 @@
+// dfgroup.nv — split by key, aggregate, and put the answer back in a
+// frame.
+//
+// A GROUPING IS POSITIONS, NOT FRAMES.  `DfGroups` holds the distinct
+// key rows and, for each, the POSITIONS in the original frame that
+// belong to it.  It does not hold sub-frames: materialising one frame
+// per group copies every value in the original once more, for a
+// grouping whose whole use is usually a single `aggregate` call.  So a
+// group is a window into a frame the caller still holds, and
+// `dfgroup.frame_of` is there for the case where somebody really does
+// want one group as a frame.
+//
+// THE POSITIONS ARE FLAT, IN TWO LISTS.  `starts` says where each
+// group's positions begin inside `members`, and the group's length is
+// the next start minus its own — with a final entry so the last group
+// needs no special case.  One list of Ints rather than a list of lists
+// of Ints: the same data, one allocation instead of one per group, and
+// a grouping of a million rows into a million groups is a real shape.
+//
+// GROUPS COME OUT IN FIRST-APPEARANCE ORDER.  Not sorted: sorting is
+// `dftable.sort` on the result and costs nothing extra when it is
+// wanted, whereas an ordering imposed here cannot be undone.  polars
+// makes the same choice, and it is the one that makes a group-by
+// reproducible without deciding how text orders.
+//
+// A NULL KEY IS A GROUP.  Unlike a join key, where a null matches
+// nothing — the two rules differ because the questions differ.
+// "How many rows have no region?" is a question a notebook asks and
+// pandas answers with silence, having dropped them.  Every row is in
+// exactly one group here, so the group sizes always sum to the
+// frame's row count, and that is a property worth being able to rely
+// on.  `dfcolumn`'s module comment is where the rest of the null rule
+// lives.
+
+// A frame split into groups, as positions into that frame.
+//
+// ```novo
+// use dfgroup
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.strings("c", ["a", "b", "a"])])
+//         Ok(t)  =>
+//             match dfgroup.by(t, ["c"])
+//                 Ok(g)  => println("${dfgroup.count(g)}")
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub struct DfGroups
+    // One row per group, holding just the key columns, in
+    // first-appearance order.  This is what `aggregate` puts its
+    // result columns beside.
+    keys: DfTable
+    // Where each group's run begins inside `members`.  One entry per
+    // group plus a final one equal to `list.len(members)`, so group
+    // `i` owns `members[starts[i] .. starts[i+1]]` with no special
+    // case for the last.
+    starts: [Int]
+    // Every row position of the original frame, gathered so that one
+    // group's positions are contiguous.  Within a group, positions
+    // keep the frame's original order.
+    members: [Int]
+    // How many rows the frame had.  Carried so that `sizes` can be
+    // checked against it and so a grouping can be validated without
+    // the frame in hand.
+    source_rows: Int
+
+// Which aggregation to run over a column.
+//
+// ```novo
+// use dfgroup
+//
+// fn main() [io]
+//     println("${DfMean == DfMean}")
+// ```
+pub enum DfAgg
+    // How many PRESENT values — not how many rows.  `dfgroup.sizes` is
+    // the row count, and the difference between them is how many are
+    // missing.
+    DfCount
+    // The total of the present values; the type's zero for a group
+    // with none.
+    DfSum
+    // The mean of the present values, as a Float; `DfEmptyGroup` for a
+    // group with none.
+    DfMean
+    // The smallest present value; `DfEmptyGroup` for a group with
+    // none.
+    DfMin
+    // The largest present value; `DfEmptyGroup` for a group with none.
+    DfMax
+
+// One aggregation to run, and what to call its column.
+//
+// ```novo
+// use dfgroup
+//
+// fn main() [io]
+//     let s = DfAggSpec { column: "w", how: DfMean, into: "mean_w" }
+//     println(s.into)
+// ```
+pub struct DfAggSpec
+    // The column of the ORIGINAL frame to aggregate.
+    column: Str
+    // Which aggregation.
+    how: DfAgg
+    // The name the result column gets.  Named by the caller rather
+    // than derived, because a derived name — `w_mean`, `mean(w)` — is a
+    // convention every library spells differently and none of them
+    // spells the way the caller's report wants.
+    into: Str
+
+// Split a frame by the distinct values of these columns.
+//
+// One or more key columns; several make a compound key, matched by the
+// tuple of their values.  Groups come out in first-appearance order,
+// and a null key is a group of its own — see the module comment for
+// both.  `DfNoSuchColumn` for a key the frame does not have, and
+// `DfBadRange` for an empty key list, which names no grouping.
+//
+// ```novo
+// use dfgroup
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.strings("c", ["a", "b", "a"])])
+//         Ok(t)  =>
+//             match dfgroup.by(t, ["c"])
+//                 Ok(g)  => println("${dfgroup.count(g)}")
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn by(t: DfTable, keys: [Str]) -> Result<DfGroups, DfFault>
+    todo("dataframe-nv.dfgroup.by")
+
+// How many groups there are.
+//
+// ```novo
+// use dfgroup
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.strings("c", ["a", "a"])])
+//         Ok(t)  =>
+//             match dfgroup.by(t, ["c"])
+//                 Ok(g)  => println("${dfgroup.count(g)}")
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn count(g: DfGroups) -> Int
+    todo("dataframe-nv.dfgroup.count")
+
+// The distinct key rows, one per group, in group order.
+//
+// ```novo
+// use dfgroup
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.strings("c", ["a", "b"])])
+//         Ok(t)  =>
+//             match dfgroup.by(t, ["c"])
+//                 Ok(g)  => println("${dftable.names(dfgroup.keys(g))}")
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn keys(g: DfGroups) -> DfTable
+    todo("dataframe-nv.dfgroup.keys")
+
+// How many ROWS are in each group, as an Int column.
+//
+// Not how many present values — that is `DfCount` on a named column.
+// These sizes always sum to the frame's row count, because a null key
+// is a group rather than a dropped row.
+//
+// ```novo
+// use dfgroup
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.strings("c", ["a", "a", "b"])])
+//         Ok(t)  =>
+//             match dfgroup.by(t, ["c"])
+//                 Ok(g)  => println("${dfcolumn.len(dfgroup.sizes(g, "n"))}")
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn sizes(g: DfGroups, into: Str) -> DfColumn
+    todo("dataframe-nv.dfgroup.sizes")
+
+// The row positions of one group.
+//
+// The raw access underneath everything else here, `pub` because a
+// caller doing something this package does not name — a median, a
+// weighted mean, a first-row-per-group — needs the positions and
+// `dftable.take`.
+//
+// `DfRowOutOfRange` for a group number off the end.
+//
+// ```novo
+// use dfgroup
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.strings("c", ["a", "a"])])
+//         Ok(t)  =>
+//             match dfgroup.by(t, ["c"])
+//                 Ok(g)  =>
+//                     match dfgroup.positions(g, 0)
+//                         Ok(p)  => println("${list.len(p)}")
+//                         Err(e) => println(e.message())
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn positions(g: DfGroups, group: Int) -> Result<[Int], DfFault>
+    todo("dataframe-nv.dfgroup.positions")
+
+// One group as a frame of its own.
+//
+// The escape from the positions representation, for the caller who
+// really does want a sub-frame.  It costs a copy of that group's rows,
+// which is why it is a call and not what `by` produces.
+//
+// ```novo
+// use dfgroup
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.strings("c", ["a", "a"])])
+//         Ok(t)  =>
+//             match dfgroup.by(t, ["c"])
+//                 Ok(g)  =>
+//                     match dfgroup.frame_of(g, t, 0)
+//                         Ok(s)  => println("${dftable.rows(s)}")
+//                         Err(e) => println(e.message())
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn frame_of(g: DfGroups, t: DfTable, group: Int) -> Result<DfTable, DfFault>
+    todo("dataframe-nv.dfgroup.frame_of")
+
+// One aggregation over one column, as a column with one row per group.
+//
+// The single-aggregation call, and what `aggregate` runs once per
+// spec.  Every aggregation follows the null rule in `dfcolumn`'s
+// module comment; `DfEmptyGroup` reaches the caller when a group has
+// no present values and the aggregation has no answer for that.
+//
+// ```novo
+// use dfgroup
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.strings("c", ["a", "a"]), dfcolumn.ints("n", [1, 2])])
+//         Ok(t)  =>
+//             match dfgroup.by(t, ["c"])
+//                 Ok(g)  =>
+//                     match dfgroup.agg(g, t, DfAggSpec { column: "n", how: DfSum, into: "total" })
+//                         Ok(c)  => println(dfcolumn.name(c))
+//                         Err(e) => println(e.message())
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn agg(g: DfGroups, t: DfTable, spec: DfAggSpec) -> Result<DfColumn, DfFault>
+    todo("dataframe-nv.dfgroup.agg")
+
+// The key columns beside every aggregation, as one frame.
+//
+// The call a notebook actually writes.  The result is the key columns
+// in key order, then one column per spec in spec order.
+// `DfDuplicateColumn` when two specs name the same `into`, or one
+// collides with a key.
+//
+// ```novo
+// use dfgroup
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.strings("c", ["a", "a"]), dfcolumn.ints("n", [1, 2])])
+//         Ok(t)  =>
+//             match dfgroup.by(t, ["c"])
+//                 Ok(g)  =>
+//                     match dfgroup.aggregate(g, t, [DfAggSpec { column: "n", how: DfMean, into: "mean_n" }])
+//                         Ok(s)  => println("${dftable.names(s)}")
+//                         Err(e) => println(e.message())
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn aggregate(g: DfGroups, t: DfTable, specs: [DfAggSpec]) -> Result<DfTable, DfFault>
+    todo("dataframe-nv.dfgroup.aggregate")

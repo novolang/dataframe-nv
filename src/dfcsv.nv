@@ -1,0 +1,133 @@
+// dfcsv.nv — the bridge between csv-nv's records and a frame.
+//
+// WHY THIS MODULE IS SMALL AND WHY IT EXISTS AT ALL.  A CSV file is the
+// first thing a notebook loads, and reading one is two steps that
+// belong to two packages: csv-nv turns bytes into a `Header` and a list
+// of `Row`s, and this turns those into columns.  Neither step reads a
+// file — csv-nv is `core` too, and the host is what opens it — so the
+// whole path from a path on disk to a frame is:
+//
+//     the host reads the bytes
+//     csv-nv parses them into a Header and Rows
+//     dfcsv.of_records turns those into a DfTable
+//
+// and only the first line performs anything.
+//
+// WHY THE CSV PATH IS NAMED WHEN A GENERIC ONE EXISTS.
+// `dftable.of_rows` takes `[Str]` and `[[Str]]` and serves a database
+// cursor, a JSON array of arrays and a fixed-width reader as well as a
+// CSV.  So this module is not the only way in, and it is not load-
+// bearing.  What it buys is that the CSV path is TYPED: a caller
+// holding csv-nv's own values does not have to unpack them into
+// lists first, and a `Row` that is the wrong width is caught here with
+// its LINE NUMBER — which csv-nv carries and a bare `[Str]` has thrown
+// away.  That line number in the error is the whole argument for the
+// dependency.
+//
+// THE EMPTY FIELD IS A NULL, except in a Str column where it is the
+// empty string.  `dfcell.parse` is where that rule lives and this
+// module does not restate it.  It is the one CSV convention that
+// cannot be got right for everybody: a file that means "empty string"
+// in a numeric column has no way to say so, and a file that means
+// "missing" in a text column has no way either.  Callers who need the
+// other reading load the column as Str and `dfcolumn.cast` it
+// themselves.
+
+// A frame from csv-nv's header and records, with the kinds named.
+//
+// `DfLengthMismatch` for a record that is not as wide as the header —
+// and because a `Row` carries the line it started on, the reader is
+// sent to the line rather than to the record number.  `DfBadRange`
+// when `kinds` is not as long as the header, and
+// `DfDuplicateColumn` when the header repeats a name, which real files
+// do and which a frame cannot represent.
+//
+// ```novo
+// use dfcsv
+//
+// fn main() [io]
+//     let h = Header { names: ["n", "c"] }
+//     let r = [Row { fields: ["1", "a"], line: 2, index: 0 }]
+//     match dfcsv.of_records(h, r, [DfIntKind, DfStrKind])
+//         Ok(t)  => println("${dftable.rows(t)}")
+//         Err(e) => println(e.message())
+// ```
+pub fn of_records(header: Header, records: [Row], kinds: [DfKind]) -> Result<DfTable, DfFault>
+    todo("dataframe-nv.dfcsv.of_records")
+
+// A frame from csv-nv's header and records, with the kinds inferred.
+//
+// One pass per column through `dfcell.infer`: Int, then Float, then
+// Bool, then Str, narrowest that fits every field.  Convenient and
+// therefore dangerous in exactly one way, which is worth knowing
+// before using it — a column of identifiers that happen to be all
+// digits infers as Int, and a leading zero is gone.  A loader that
+// cares names its kinds with `of_records` instead.
+//
+// ```novo
+// use dfcsv
+//
+// fn main() [io]
+//     let h = Header { names: ["n"] }
+//     let r = [Row { fields: ["1"], line: 2, index: 0 }]
+//     match dfcsv.of_records_inferred(h, r)
+//         Ok(t)  => println("${dftable.names(t)}")
+//         Err(e) => println(e.message())
+// ```
+pub fn of_records_inferred(header: Header, records: [Row]) -> Result<DfTable, DfFault>
+    todo("dataframe-nv.dfcsv.of_records_inferred")
+
+// The kind each column of these records would be read at.
+//
+// What `of_records_inferred` runs before it builds anything, exposed so
+// a caller can INSPECT the inference, override one entry, and pass the
+// list to `of_records`.  That is the shape a careful loader wants: see
+// what was guessed, correct the identifier column, then load.
+//
+// ```novo
+// use dfcsv
+//
+// fn main() [io]
+//     let h = Header { names: ["n"] }
+//     let r = [Row { fields: ["1"], line: 2, index: 0 }]
+//     match dfcsv.infer_kinds(h, r)
+//         Ok(ks) => println("${list.len(ks)}")
+//         Err(e) => println(e.message())
+// ```
+pub fn infer_kinds(header: Header, records: [Row]) -> Result<[DfKind], DfFault>
+    todo("dataframe-nv.dfcsv.infer_kinds")
+
+// This frame's rows as csv-nv records, ready for its writer.
+//
+// Each cell through `dfcell.render`, so a null is the empty field.  The
+// `line` on each record is its 1-based position counting the header,
+// and `index` is its 0-based row number — the numbering csv-nv's reader
+// would have produced for the same file, so a round trip through the
+// writer and back gives records that compare equal.
+//
+// The header comes back separately from `header_of`, because csv-nv's
+// writer takes the two apart too.
+//
+// ```novo
+// use dfcsv
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("n", [1, 2])])
+//         Ok(t)  => println("${list.len(dfcsv.to_records(t))}")
+//         Err(e) => println(e.message())
+// ```
+pub fn to_records(t: DfTable) -> [Row]
+    todo("dataframe-nv.dfcsv.to_records")
+
+// This frame's column names as a csv-nv header.
+//
+// ```novo
+// use dfcsv
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("n", [1])])
+//         Ok(t)  => println("${dfcsv.header_of(t).names}")
+//         Err(e) => println(e.message())
+// ```
+pub fn header_of(t: DfTable) -> Header
+    todo("dataframe-nv.dfcsv.header_of")

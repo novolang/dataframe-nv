@@ -1,0 +1,481 @@
+// dftable.nv — a frame: named columns over one shared length.
+//
+// THE INVARIANT IS ONE SENTENCE.  Every column in a frame has the same
+// length, and no two share a name.  `of_columns` is where both are
+// checked, and every other function here preserves them rather than
+// re-checking — which is why `of_columns` returns a `Result` and
+// `head` does not.
+//
+// A FRAME HAS NO ROW INDEX, ON PURPOSE.  pandas has one, and it is
+// where most of the surprise in pandas lives: an operation silently
+// aligns on it, two frames that look compatible are not, and a reset
+// is the fix nobody remembers to write.  Here a row is a POSITION —
+// 0 to `rows(t) - 1` — and two frames combine only where the caller
+// says how: `join` on a named key, `concat_rows` by agreeing on
+// columns.  If a caller wants an index, it is a column, and they name
+// it in the join.  polars made the same choice.
+//
+// WHY `filter` TAKES AN `NdMask` AND NOT A PREDICATE FUNCTION.  A
+// predicate over a ROW would have to be handed a `[DfCell]` — one
+// tagged allocation per column per row — and would run once per row in
+// the caller's code.  A mask is computed COLUMN-wise, in ndarray-nv,
+// over unboxed doubles: `dfcolumn.to_floats` then `ndfloat.gt` then
+// this.  That is the shape every columnar frame has, and it is why the
+// ndarray-nv dependency is worth having.  The masks combine with
+// `ndbool.both` and `ndbool.either` before they get here.
+//
+// SORTING IS BY KEYS AND NOT BY A COMPARATOR, for the same reason: a
+// comparator is called O(n log n) times from the caller's code, and a
+// key list is read once per column.  `DfSortKey` carries the column
+// and the direction; nulls go last in both, which is the null rule.
+//
+// WHAT A NULL DOES, everywhere in this module: `dfcolumn`'s module
+// comment.
+
+// Named columns over one shared length.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("n", [1, 2])])
+//         Ok(t)  => println("${dftable.rows(t)} by ${dftable.width(t)}")
+//         Err(e) => println(e.message())
+// ```
+pub struct DfTable
+    // The columns, in the order a reader sees them.  Order is the
+    // caller's and is preserved by everything except `select`, which
+    // takes the order it was given.
+    columns: [DfColumn]
+    // How many rows every column has.  Carried rather than derived so
+    // that an EMPTY frame — no columns — still knows its length, which
+    // is what lets `with_column` on it check anything at all.
+    rows: Int
+
+// How a sort orders by one column.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     let k = DfSortKey { column: "n", descending: false }
+//     println(k.column)
+// ```
+pub struct DfSortKey
+    // The column to order by.  `DfNoSuchColumn` at sort time if the
+    // frame does not have it.
+    column: Str
+    // Largest first when true.  Nulls go LAST either way — see the
+    // null rule.
+    descending: Bool
+
+// A frame over these columns.
+//
+// `DfLengthMismatch` when they are not all the same length, and
+// `DfDuplicateColumn` when two share a name.  An empty list is the
+// 0-by-0 frame, which is what `empty` returns.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("n", [1, 2]), dfcolumn.strings("c", ["a", "b"])])
+//         Ok(t)  => println("${dftable.width(t)}")
+//         Err(e) => println(e.message())
+// ```
+pub fn of_columns(columns: [DfColumn]) -> Result<DfTable, DfFault>
+    todo("dataframe-nv.dftable.of_columns")
+
+// The frame with no columns and no rows.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     println("${dftable.rows(dftable.empty())}")
+// ```
+pub fn empty() -> DfTable
+    todo("dataframe-nv.dftable.empty")
+
+// A frame from a header and rows of text, with the kinds named.
+//
+// The generic loading path: a database cursor, a JSON array of arrays
+// and a fixed-width file all arrive as strings in row order, and this
+// turns them into columns.  Each field is read by `dfcell.parse`, so
+// an empty field is a null at every kind except Str, and a field that
+// does not parse is a null too — a loader that would rather reject the
+// row checks `null_count` afterwards.
+//
+// `DfLengthMismatch` when a row is not as wide as the header, and
+// `DfBadRange` when `kinds` is not as long as the header.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     match dftable.of_rows(["n", "c"], [["1", "a"], ["2", "b"]], [DfIntKind, DfStrKind])
+//         Ok(t)  => println("${dftable.rows(t)}")
+//         Err(e) => println(e.message())
+// ```
+pub fn of_rows(header: [Str], rows: [[Str]], kinds: [DfKind]) -> Result<DfTable, DfFault>
+    todo("dataframe-nv.dftable.of_rows")
+
+// How many rows this frame has.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     println("${dftable.rows(dftable.empty())}")
+// ```
+pub fn rows(t: DfTable) -> Int
+    todo("dataframe-nv.dftable.rows")
+
+// How many columns this frame has.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     println("${dftable.width(dftable.empty())}")
+// ```
+pub fn width(t: DfTable) -> Int
+    todo("dataframe-nv.dftable.width")
+
+// The column names, in frame order.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     println("${dftable.names(dftable.empty())}")
+// ```
+pub fn names(t: DfTable) -> [Str]
+    todo("dataframe-nv.dftable.names")
+
+// One column by name.  `DfNoSuchColumn` naming what was asked for.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("n", [1])])
+//         Ok(t)  =>
+//             match dftable.column(t, "n")
+//                 Ok(c)  => println(dfcolumn.name(c))
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn column(t: DfTable, name: Str) -> Result<DfColumn, DfFault>
+    todo("dataframe-nv.dftable.column")
+
+// Whether this frame has a column by that name.
+//
+// The question `column` answers destructively.  A notebook checking
+// what it loaded asks this; a notebook that knows what it loaded calls
+// `column` and matches.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     println("${dftable.has(dftable.empty(), "n")}")
+// ```
+pub fn has(t: DfTable, name: Str) -> Bool
+    todo("dataframe-nv.dftable.has")
+
+// These columns, in this order.
+//
+// A projection, and a reordering: the result's column order is the
+// order of `names`, not the frame's.  A name twice is
+// `DfDuplicateColumn`, and one the frame does not have is
+// `DfNoSuchColumn`.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("n", [1]), dfcolumn.strings("c", ["a"])])
+//         Ok(t)  =>
+//             match dftable.select(t, ["c"])
+//                 Ok(s)  => println("${dftable.names(s)}")
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn select(t: DfTable, names: [Str]) -> Result<DfTable, DfFault>
+    todo("dataframe-nv.dftable.select")
+
+// Every column except these.
+//
+// `DfNoSuchColumn` for a name the frame does not have — dropping
+// something that was never there is far more often a typo than an
+// intention, so it is refused rather than ignored.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("n", [1]), dfcolumn.strings("c", ["a"])])
+//         Ok(t)  =>
+//             match dftable.drop(t, ["c"])
+//                 Ok(s)  => println("${dftable.names(s)}")
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn drop(t: DfTable, names: [Str]) -> Result<DfTable, DfFault>
+    todo("dataframe-nv.dftable.drop")
+
+// The frame with this column added, or the one of that name replaced.
+//
+// Adding and replacing are one call because they are one intention —
+// "this frame should have this column" — and splitting them would make
+// a notebook that reruns a cell fail the second time.  A replacement
+// keeps the column's ORIGINAL position; a new column goes on the end.
+// `DfLengthMismatch` when it is not the frame's length.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("n", [1, 2])])
+//         Ok(t)  =>
+//             match dftable.with_column(t, dfcolumn.floats("w", [1.0, 2.0]))
+//                 Ok(s)  => println("${dftable.names(s)}")
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn with_column(t: DfTable, c: DfColumn) -> Result<DfTable, DfFault>
+    todo("dataframe-nv.dftable.with_column")
+
+// The frame with one column renamed, in place.
+//
+// `DfNoSuchColumn` for the old name, `DfDuplicateColumn` when the new
+// one is already taken.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("n", [1])])
+//         Ok(t)  =>
+//             match dftable.rename(t, "n", "count")
+//                 Ok(s)  => println("${dftable.names(s)}")
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn rename(t: DfTable, from: Str, to: Str) -> Result<DfTable, DfFault>
+    todo("dataframe-nv.dftable.rename")
+
+// The first `n` rows, or all of them if there are fewer.
+//
+// Clamping rather than failing, because "show me the top ten" of a
+// three-row frame means three rows and not an error.  A negative `n`
+// is the empty frame, for the same reason.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("n", [1, 2, 3])])
+//         Ok(t)  => println("${dftable.rows(dftable.head(t, 2))}")
+//         Err(e) => println(e.message())
+// ```
+pub fn head(t: DfTable, n: Int) -> DfTable
+    todo("dataframe-nv.dftable.head")
+
+// The last `n` rows, clamped like `head`.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("n", [1, 2, 3])])
+//         Ok(t)  => println("${dftable.rows(dftable.tail(t, 2))}")
+//         Err(e) => println(e.message())
+// ```
+pub fn tail(t: DfTable, n: Int) -> DfTable
+    todo("dataframe-nv.dftable.tail")
+
+// The rows `[start, stop)`.
+//
+// Half-open, like every other range in this tier.  `DfBadRange` for a
+// start past its stop or a bound off the frame — unlike `head`, which
+// clamps, because a slice names both ends and getting one wrong is a
+// mistake rather than a shorthand.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("n", [1, 2, 3])])
+//         Ok(t)  =>
+//             match dftable.slice(t, 1, 3)
+//                 Ok(s)  => println("${dftable.rows(s)}")
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn slice(t: DfTable, start: Int, stop: Int) -> Result<DfTable, DfFault>
+    todo("dataframe-nv.dftable.slice")
+
+// The rows a mask keeps, in order.
+//
+// The mask is built column-wise — `dfcolumn.to_floats`, then an
+// `ndfloat` comparison, then `ndbool.both` to combine — which is why
+// this takes one rather than a predicate; the module comment argues
+// it.  `DfBadMask` when the mask is not the frame's length or is not
+// rank 1.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     match ndbool.of_list([true, false, true], [3])
+//         Ok(m)  =>
+//             match dftable.of_columns([dfcolumn.ints("n", [1, 2, 3])])
+//                 Ok(t)  =>
+//                     match dftable.filter(t, m)
+//                         Ok(s)  => println("${dftable.rows(s)}")
+//                         Err(e) => println(e.message())
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn filter(t: DfTable, keep: NdMask) -> Result<DfTable, DfFault>
+    todo("dataframe-nv.dftable.filter")
+
+// The rows at these positions, in the order given.
+//
+// The gather every reordering in the package produces positions for.
+// `DfRowOutOfRange` for a position off the frame.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("n", [1, 2, 3])])
+//         Ok(t)  =>
+//             match dftable.take(t, [2, 0])
+//                 Ok(s)  => println("${dftable.rows(s)}")
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn take(t: DfTable, positions: [Int]) -> Result<DfTable, DfFault>
+    todo("dataframe-nv.dftable.take")
+
+// The frame ordered by these keys, first key outermost.
+//
+// STABLE: rows that agree on every key keep their original order, so
+// sorting by city and then by name gives what sorting by (city, name)
+// gives.  Nulls go LAST in both directions — the null rule.
+// `DfNoSuchColumn` for a key the frame does not have.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("n", [3, 1, 2])])
+//         Ok(t)  =>
+//             match dftable.sort(t, [DfSortKey { column: "n", descending: false }])
+//                 Ok(s)  => println("${dftable.rows(s)}")
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn sort(t: DfTable, keys: [DfSortKey]) -> Result<DfTable, DfFault>
+    todo("dataframe-nv.dftable.sort")
+
+// The positions that would sort this frame, without moving anything.
+//
+// What `sort` computes on the way, exposed because a caller often
+// wants to apply one frame's order to ANOTHER frame — the labels
+// beside the measurements — and `take` is how they do it.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("n", [3, 1, 2])])
+//         Ok(t)  =>
+//             match dftable.sort_positions(t, [DfSortKey { column: "n", descending: false }])
+//                 Ok(p)  => println("${p}")
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn sort_positions(t: DfTable, keys: [DfSortKey]) -> Result<[Int], DfFault>
+    todo("dataframe-nv.dftable.sort_positions")
+
+// One row, as cells in column order.
+//
+// `DfRowOutOfRange` off the end.  A missing value is `DfNullCell`.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("n", [1, 2])])
+//         Ok(t)  =>
+//             match dftable.row_cells(t, 1)
+//                 Ok(cs) => println("${list.len(cs)}")
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn row_cells(t: DfTable, row: Int) -> Result<[DfCell], DfFault>
+    todo("dataframe-nv.dftable.row_cells")
+
+// Every row as text, in column order — the shape a writer wants.
+//
+// `dfcell.render`'s rule, so a null is the empty string.  The header
+// is `names`, kept separate because a caller writing a CSV needs the
+// two apart anyway.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("n", [1, 2])])
+//         Ok(t)  => println("${list.len(dftable.to_rows(t))}")
+//         Err(e) => println(e.message())
+// ```
+pub fn to_rows(t: DfTable) -> [[Str]]
+    todo("dataframe-nv.dftable.to_rows")
+
+// Two frames stacked, row-wise.
+//
+// They must have the same column NAMES — in any order, matched by name
+// and not by position, because matching by position is how two frames
+// that look alike get silently interleaved — and each matching pair
+// must have the same kind.  `DfNoSuchColumn` names the first column
+// one side has and the other does not; `DfKindMismatch` names a pair
+// that disagrees.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("n", [1])])
+//         Ok(t)  =>
+//             match dftable.concat_rows(t, t)
+//                 Ok(s)  => println("${dftable.rows(s)}")
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn concat_rows(top: DfTable, bottom: DfTable) -> Result<DfTable, DfFault>
+    todo("dataframe-nv.dftable.concat_rows")
+
+// The rows with no nulls in any of the named columns.
+//
+// "Complete cases", which is the first thing a notebook does to a
+// loaded frame.  An empty `columns` list means every column.
+// `DfNoSuchColumn` for a name the frame does not have.
+//
+// ```novo
+// use dftable
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("n", [1, 2])])
+//         Ok(t)  =>
+//             match dftable.drop_nulls(t, [])
+//                 Ok(s)  => println("${dftable.rows(s)}")
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn drop_nulls(t: DfTable, columns: [Str]) -> Result<DfTable, DfFault>
+    todo("dataframe-nv.dftable.drop_nulls")

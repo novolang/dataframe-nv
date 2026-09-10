@@ -1,0 +1,194 @@
+// dfgroup_tests.nv — the API suite for group-by.
+//
+// RED ON PURPOSE: every body is a `todo()`, so each assertion reaches
+// `not implemented: dataframe-nv.dfgroup.<fn>`.
+//
+// The two cases worth reading before the rest: groups come out in
+// FIRST-APPEARANCE order, and a null key is a group of its own — so
+// the group sizes always sum to the frame's row count.
+
+use std.test
+use dfgroup
+use dftable
+use dfcolumn
+use dfcell
+
+// Three rows in two cities, with the second city appearing second.
+fn sales() -> DfTable
+    let city = DfColumn { name: "c",
+        cells: DfStrCells(["oslo", "bergen", "oslo"]),
+        present: [true, true, true] }
+    let sale = DfColumn { name: "n", cells: DfIntCells([10, 20, 30]), present: [true, true, true] }
+    DfTable { columns: [city, sale], rows: 3 }
+
+// The same, with the middle city missing.
+fn gappy() -> DfTable
+    let city = DfColumn { name: "c", cells: DfStrCells(["oslo", "", "oslo"]), present: [true, false, true] }
+    let sale = DfColumn { name: "n", cells: DfIntCells([10, 20, 30]), present: [true, true, true] }
+    DfTable { columns: [city, sale], rows: 3 }
+
+@test
+fn test_by_splits_into_first_appearance_order() [io]
+    test.case("two cities, two groups")
+    match dfgroup.by(sales(), ["c"])
+        Ok(g)  => test.assert(dfgroup.count(g) == 2)
+        Err(e) => test.fail("by failed: ${e.message()}")
+
+    test.case("the keys frame holds one row per group, key columns only")
+    match dfgroup.by(sales(), ["c"])
+        Ok(g)  =>
+            let k = dfgroup.keys(g)
+            test.assert(dftable.rows(k) == 2)
+            test.assert(dftable.names(k) == ["c"])
+        Err(e) => test.fail("by failed: ${e.message()}")
+
+    test.case("a key the frame does not have is refused")
+    match dfgroup.by(sales(), ["region"])
+        Ok(_)  => test.fail("grouping by an absent column succeeded")
+        Err(_) => test.assert(true)
+
+    test.case("no key columns name no grouping")
+    match dfgroup.by(sales(), [])
+        Ok(_)  => test.fail("an empty key list produced a grouping")
+        Err(_) => test.assert(true)
+
+@test
+fn test_a_compound_key_matches_on_the_tuple() [io]
+    test.case("two key columns make one key")
+    match dfgroup.by(sales(), ["c", "n"])
+        Ok(g)  =>
+            test.assert(dfgroup.count(g) == 3)
+            test.assert(dftable.names(dfgroup.keys(g)) == ["c", "n"])
+        Err(e) => test.fail("a compound grouping failed: ${e.message()}")
+
+@test
+fn test_a_null_key_is_a_group_so_the_sizes_sum_to_the_rows() [io]
+    test.case("the missing city gets its own group")
+    match dfgroup.by(gappy(), ["c"])
+        Ok(g)  => test.assert(dfgroup.count(g) == 2)
+        Err(e) => test.fail("by failed: ${e.message()}")
+
+    test.case("no row is dropped, so the sizes account for every one")
+    match dfgroup.by(gappy(), ["c"])
+        Ok(g)  =>
+            let sizes = dfgroup.sizes(g, "rows")
+            test.assert(dfcolumn.len(sizes) == 2)
+            match dfcolumn.sum(sizes)
+                Ok(v)  => test.assert(dfcell.render(v) == "3")
+                Err(e) => test.fail("summing the sizes failed: ${e.message()}")
+        Err(e) => test.fail("by failed: ${e.message()}")
+
+@test
+fn test_sizes_counts_rows_where_count_counts_present_values() [io]
+    test.case("sizes names its own column")
+    match dfgroup.by(sales(), ["c"])
+        Ok(g)  => test.assert(dfcolumn.name(dfgroup.sizes(g, "rows")) == "rows")
+        Err(e) => test.fail("by failed: ${e.message()}")
+
+    test.case("DfCount over a column is a different number from sizes")
+    match dfgroup.by(sales(), ["c"])
+        Ok(g)  =>
+            match dfgroup.agg(g, sales(), DfAggSpec { column: "n", how: DfCount, into: "present" })
+                Ok(c)  => test.assert(dfcolumn.len(c) == 2)
+                Err(e) => test.fail("agg failed: ${e.message()}")
+        Err(e) => test.fail("by failed: ${e.message()}")
+
+@test
+fn test_positions_and_frame_of_reach_one_group() [io]
+    test.case("the first group has the two oslo rows")
+    match dfgroup.by(sales(), ["c"])
+        Ok(g)  =>
+            match dfgroup.positions(g, 0)
+                Ok(p)  => test.assert(p == [0, 2])
+                Err(e) => test.fail("positions failed: ${e.message()}")
+        Err(e) => test.fail("by failed: ${e.message()}")
+
+    test.case("a group number off the end is refused")
+    match dfgroup.by(sales(), ["c"])
+        Ok(g)  =>
+            match dfgroup.positions(g, 9)
+                Ok(_)  => test.fail("group 9 of a 2-group split answered")
+                Err(_) => test.assert(true)
+        Err(e) => test.fail("by failed: ${e.message()}")
+
+    test.case("frame_of materialises one group, columns and all")
+    match dfgroup.by(sales(), ["c"])
+        Ok(g)  =>
+            match dfgroup.frame_of(g, sales(), 0)
+                Ok(s)  =>
+                    test.assert(dftable.rows(s) == 2)
+                    test.assert(dftable.width(s) == 2)
+                Err(e) => test.fail("frame_of failed: ${e.message()}")
+        Err(e) => test.fail("by failed: ${e.message()}")
+
+@test
+fn test_agg_runs_one_aggregation_per_group() [io]
+    test.case("a sum per group")
+    match dfgroup.by(sales(), ["c"])
+        Ok(g)  =>
+            match dfgroup.agg(g, sales(), DfAggSpec { column: "n", how: DfSum, into: "total" })
+                Ok(c)  =>
+                    test.assert(dfcolumn.name(c) == "total")
+                    test.assert(dfcolumn.len(c) == 2)
+                Err(e) => test.fail("agg failed: ${e.message()}")
+        Err(e) => test.fail("by failed: ${e.message()}")
+
+    test.case("mean, min and max are the other three a notebook runs")
+    match dfgroup.by(sales(), ["c"])
+        Ok(g)  =>
+            match dfgroup.agg(g, sales(), DfAggSpec { column: "n", how: DfMean, into: "m" })
+                Ok(c)  => test.assert(dfcolumn.len(c) == 2)
+                Err(e) => test.fail("mean failed: ${e.message()}")
+            match dfgroup.agg(g, sales(), DfAggSpec { column: "n", how: DfMin, into: "lo" })
+                Ok(c)  => test.assert(dfcolumn.len(c) == 2)
+                Err(e) => test.fail("min failed: ${e.message()}")
+            match dfgroup.agg(g, sales(), DfAggSpec { column: "n", how: DfMax, into: "hi" })
+                Ok(c)  => test.assert(dfcolumn.len(c) == 2)
+                Err(e) => test.fail("max failed: ${e.message()}")
+        Err(e) => test.fail("by failed: ${e.message()}")
+
+    test.case("aggregating a column the frame does not have is refused")
+    match dfgroup.by(sales(), ["c"])
+        Ok(g)  =>
+            match dfgroup.agg(g, sales(), DfAggSpec { column: "weight", how: DfSum, into: "w" })
+                Ok(_)  => test.fail("an absent column was aggregated")
+                Err(_) => test.assert(true)
+        Err(e) => test.fail("by failed: ${e.message()}")
+
+@test
+fn test_aggregate_puts_the_keys_beside_the_answers() [io]
+    test.case("keys first, then one column per spec, in spec order")
+    match dfgroup.by(sales(), ["c"])
+        Ok(g)  =>
+            match dfgroup.aggregate(g, sales(), [DfAggSpec { column: "n", how: DfSum, into: "total" },
+                                                 DfAggSpec { column: "n", how: DfMean, into: "mean_n" }])
+                Ok(s)  =>
+                    test.assert(dftable.names(s) == ["c", "total", "mean_n"])
+                    test.assert(dftable.rows(s) == 2)
+                Err(e) => test.fail("aggregate failed: ${e.message()}")
+        Err(e) => test.fail("by failed: ${e.message()}")
+
+    test.case("two specs writing the same name are refused")
+    match dfgroup.by(sales(), ["c"])
+        Ok(g)  =>
+            match dfgroup.aggregate(g, sales(), [DfAggSpec { column: "n", how: DfSum, into: "x" },
+                                                 DfAggSpec { column: "n", how: DfMax, into: "x" }])
+                Ok(_)  => test.fail("two specs named `x` produced a frame")
+                Err(_) => test.assert(true)
+        Err(e) => test.fail("by failed: ${e.message()}")
+
+    test.case("a spec colliding with a key column is refused too")
+    match dfgroup.by(sales(), ["c"])
+        Ok(g)  =>
+            match dfgroup.aggregate(g, sales(), [DfAggSpec { column: "n", how: DfSum, into: "c" }])
+                Ok(_)  => test.fail("a spec overwrote the key column")
+                Err(_) => test.assert(true)
+        Err(e) => test.fail("by failed: ${e.message()}")
+
+    test.case("no specs at all is the key frame")
+    match dfgroup.by(sales(), ["c"])
+        Ok(g)  =>
+            match dfgroup.aggregate(g, sales(), [])
+                Ok(s)  => test.assert(dftable.names(s) == ["c"])
+                Err(e) => test.fail("an empty aggregate failed: ${e.message()}")
+        Err(e) => test.fail("by failed: ${e.message()}")

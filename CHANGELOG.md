@@ -1,0 +1,49 @@
+# Changelog
+
+All notable changes to dataframe-nv are recorded here. The format is
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this
+package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
+with the pre-1.0 rule that a breaking change bumps the MINOR number.
+
+## 0.0.1 — 2026-09-10
+
+The **interface**: every signature and every effect row, and no bodies.
+`stability = "draft"`, and the release is recorded `implemented = false`.
+
+### Added
+
+- `dffault` — one error enum for the whole package, ten variants, each
+  naming the column or the count it was asked about. `DfArrayFault`
+  carries an `NdFault` whole rather than restating ndarray-nv's nine
+  failures.
+- `dfcell` — the four element types a column can hold (Float, Int, Bool,
+  Str) and one value out of one, including the missing one. The
+  narrowest-kind inference a loader runs lives here too.
+- `dfcolumn` — a named column, its null mask, and THE NULL RULE the
+  whole package points at: skipped in an aggregation, nothing in a join
+  key, false in a predicate, last in a sort, refused in a numeric
+  conversion unless a fill is named. Also the ndarray-nv bridge:
+  `to_floats`, `to_ints`, `mask`, `present_mask`, and back.
+- `dftable` — a frame: named columns over one shared length, no row
+  index, rows as positions. `filter` takes an array mask rather than a
+  row predicate, and `sort` takes keys rather than a comparator; both
+  for the same reason, which is written down.
+- `dfgroup` — group-by as POSITIONS into the caller's frame rather than
+  as sub-frames, in two flat lists. Groups come out in first-appearance
+  order and a null key is a group of its own, so the sizes sum to the
+  row count.
+- `dfjoin` — inner and left on one key, output in the left frame's
+  order, a null key matching nothing.
+- `dfsummary` — `describe` twice: a struct for a program, a frame for a
+  person. Every number that may not exist is typed `?Float`.
+- `dfcsv` — five functions over csv-nv's `Header` and `Row`.
+
+### Known
+
+- **A `Some` binder from `list.get` over a list of structs loses its
+  struct type at a field read** — an E6000, filed under
+  `bugs/codegen-llvm/`. `tests/dfsummary_tests.nv` re-binds through an
+  annotation and says so at the line where it does.
+- No `@tier(embedded)` claim, and none is intended: a frame holds more
+  data than fits in a person's head, which is not what a
+  microcontroller is for.

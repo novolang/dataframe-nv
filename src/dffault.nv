@@ -1,0 +1,97 @@
+// dffault.nv — the one thing that can go wrong, and the ten ways it
+// does.
+//
+// ONE ERROR TYPE FOR THE WHOLE PACKAGE, for the same reason ndarray-nv
+// has one: every failure here is the caller asking for something the
+// data does not admit — a column that is not there, two columns of
+// different lengths, a sum over strings, a row off the end.  A second
+// error type would only make a caller decide which `match` to write.
+//
+// EVERY VARIANT NAMES WHAT IT WAS ASKED ABOUT.  A frame has many
+// columns and a message that does not say which one sends the reader
+// back to count them.  So `DfNoSuchColumn` carries the name that was
+// asked for, `DfLengthMismatch` carries both lengths, and
+// `DfKindMismatch` carries both kinds.
+//
+// `DfArrayFault` IS THE SEAM WITH ndarray-nv.  A numeric column becomes
+// an `NdFloat` and array arithmetic can fail on its own terms; rather
+// than restate those nine failures here, that variant carries the
+// `NdFault` whole and its message prints through.  So a caller who
+// matches on `DfArrayFault` gets the array's own reason, and one who
+// only calls `message()` never has to know there are two enums.
+
+// What a frame operation could not do.
+//
+// ```novo
+// use dffault
+//
+// fn main() [io]
+//     let e = DfNoSuchColumn("weight")
+//     println(e.message())
+// ```
+pub enum DfFault
+    // A column the frame does not have.  The name is what the caller
+    // typed, so a typo shows as itself rather than as a position.
+    DfNoSuchColumn(name: Str)
+    // Two columns in one frame with the same name.  Refused at
+    // construction rather than tolerated, because every later
+    // selection by name would have to pick one and no rule for
+    // picking is better than the caller renaming.
+    DfDuplicateColumn(name: Str)
+    // A column being added to a frame, or joined with one, whose
+    // length is not the frame's.  A frame's whole invariant is that
+    // every column is the same length; this is that invariant
+    // reporting itself.
+    DfLengthMismatch(want: Int, got: Int)
+    // An operation asked of a column whose element type cannot answer
+    // it: a mean of strings, a join on a bool key against a float one.
+    DfKindMismatch(want: DfKind, got: DfKind)
+    // A conversion to a numeric array over a column that has nulls in
+    // it, with no fill named.  See `dfcolumn`'s module comment: this
+    // package will not silently turn a missing value into a NaN.
+    DfNullInNumeric(name: Str, nulls: Int)
+    // A row number off the end of the frame.
+    DfRowOutOfRange(row: Int, rows: Int)
+    // A slice, a head or a tail whose bounds describe no frame: a
+    // negative count, or a start past its stop.
+    DfBadRange(what: Str)
+    // An aggregation or a summary over no rows at all, where the
+    // answer would have to be invented.  `count` and `sum` answer for
+    // an empty group without this; `mean`, `min` and `max` do not.
+    DfEmptyGroup(what: Str)
+    // A mask handed to `filter` whose length is not the frame's, or
+    // whose rank is not 1.  A frame's rows are a sequence, so a
+    // selection over them is too.
+    DfBadMask(want: Int, got: Int)
+    // The array arithmetic underneath said no.  The `NdFault` is
+    // carried whole rather than restated.
+    DfArrayFault(cause: NdFault)
+
+// The rule every `DfFault` is printed by: name the column or the
+// count, and print both sides of any comparison.
+//
+// `Result<T, E>` requires `E: Error` (SPEC § 3.4), so this impl is what
+// makes every fallible signature in the package spellable.
+impl Error for DfFault
+    fn message(self) -> Str
+        match self
+            DfNoSuchColumn(name)         =>
+                "no column named `${name}`"
+            DfDuplicateColumn(name)      =>
+                "two columns named `${name}` in one frame"
+            DfLengthMismatch(want, got)  =>
+                "a column of ${got} row(s) in a frame of ${want}"
+            DfKindMismatch(want, got)    =>
+                "a ${dfcell.kind_name(got)} column where a ${dfcell.kind_name(want)} one was needed"
+            DfNullInNumeric(name, nulls) =>
+                "`${name}` has ${nulls} null(s) and no fill was named"
+            DfRowOutOfRange(row, rows)   =>
+                "row ${row} of a frame with ${rows} row(s)"
+            DfBadRange(what)             =>
+                "${what} describes no frame"
+            DfEmptyGroup(what)           =>
+                "${what} of an empty group has no value"
+            DfBadMask(want, got)         =>
+                "a mask over ${got} row(s) against a frame of ${want}"
+            DfArrayFault(cause)          =>
+                "the array underneath: ${cause.message()}"

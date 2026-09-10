@@ -1,0 +1,113 @@
+// dfcell_tests.nv — the API suite for the four element types and one
+// value out of one.
+//
+// RED ON PURPOSE, like every suite in this package: the bodies are
+// `todo()`, so each assertion reaches `not implemented:
+// dataframe-nv.dfcell.<fn>`.  `novo test tests/dfcell_tests.nv
+// --isolate` gives every `@test` its own process and names the
+// function it stopped at.
+
+use std.test
+use dfcell
+
+@test
+fn test_kind_of_answers_none_for_the_missing_cell() [io]
+    test.case("a value belongs to its kind")
+    match dfcell.kind_of(DfIntCell(1))
+        Some(k) => test.assert(dfcell.kind_name(k) == "int")
+        None    => test.fail("an int cell has no kind")
+
+    test.case("missing is not a fifth kind — it is the absence of one")
+    match dfcell.kind_of(DfNullCell)
+        Some(_) => test.fail("the null cell claimed a kind")
+        None    => test.assert(true)
+
+@test
+fn test_kind_name_is_one_lower_case_word() [io]
+    test.case("the four names")
+    test.assert(dfcell.kind_name(DfFloatKind) == "float")
+    test.assert(dfcell.kind_name(DfIntKind) == "int")
+    test.assert(dfcell.kind_name(DfBoolKind) == "bool")
+    test.assert(dfcell.kind_name(DfStrKind) == "str")
+
+@test
+fn test_render_writes_a_null_as_the_empty_string() [io]
+    test.case("values render as themselves")
+    test.assert(dfcell.render(DfIntCell(42)) == "42")
+    test.assert(dfcell.render(DfStrCell("oslo")) == "oslo")
+    test.assert(dfcell.render(DfBoolCell(true)) == "true")
+
+    test.case("missing renders empty, which is what a CSV writes")
+    test.assert(dfcell.render(DfNullCell) == "")
+
+@test
+fn test_parse_reads_the_empty_field_as_a_null_except_in_text() [io]
+    test.case("a number parses at its kind")
+    match dfcell.parse("42", DfIntKind)
+        Some(c) => test.assert(dfcell.render(c) == "42")
+        None    => test.fail("`42` did not parse as an int")
+
+    test.case("an empty field is a null in a numeric column")
+    match dfcell.parse("", DfIntKind)
+        Some(c) => test.assert(dfcell.render(c) == "")
+        None    => test.fail("an empty numeric field answered None rather than a null")
+
+    test.case("an empty field is the empty STRING in a text column")
+    match dfcell.parse("", DfStrKind)
+        Some(c) =>
+            match dfcell.kind_of(c)
+                Some(k) => test.assert(dfcell.kind_name(k) == "str")
+                None    => test.fail("an empty text field became a null")
+        None    => test.fail("an empty text field answered None")
+
+    test.case("text that does not parse is None, which is not a null")
+    match dfcell.parse("banana", DfIntKind)
+        Some(_) => test.fail("`banana` parsed as an int")
+        None    => test.assert(true)
+
+@test
+fn test_infer_picks_the_narrowest_kind_that_fits_every_field() [io]
+    test.case("all digits is an int")
+    test.assert(dfcell.kind_name(dfcell.infer(["1", "2", "3"])) == "int")
+
+    test.case("a decimal point widens the whole column to float")
+    test.assert(dfcell.kind_name(dfcell.infer(["1", "2.5"])) == "float")
+
+    test.case("an empty field votes for nothing")
+    test.assert(dfcell.kind_name(dfcell.infer(["1", "", "3"])) == "int")
+
+    test.case("truths")
+    test.assert(dfcell.kind_name(dfcell.infer(["true", "false"])) == "bool")
+
+    test.case("anything else is text, which always fits")
+    test.assert(dfcell.kind_name(dfcell.infer(["1", "oslo"])) == "str")
+
+    test.case("nothing at all is text, because nothing narrower is warranted")
+    test.assert(dfcell.kind_name(dfcell.infer([])) == "str")
+
+@test
+fn test_compare_orders_within_a_kind_and_puts_nulls_last() [io]
+    test.case("two ints")
+    match dfcell.compare(DfIntCell(1), DfIntCell(2))
+        Some(o) => test.assert(o == Less)
+        None    => test.fail("two ints were not comparable")
+
+    test.case("two strings order alphabetically")
+    match dfcell.compare(DfStrCell("a"), DfStrCell("b"))
+        Some(o) => test.assert(o == Less)
+        None    => test.fail("two strings were not comparable")
+
+    test.case("a null sorts after every value")
+    match dfcell.compare(DfIntCell(1), DfNullCell)
+        Some(o) => test.assert(o == Less)
+        None    => test.fail("a value and a null were not comparable")
+
+    test.case("two nulls are equal")
+    match dfcell.compare(DfNullCell, DfNullCell)
+        Some(o) => test.assert(o == Equal)
+        None    => test.fail("two nulls were not comparable")
+
+    test.case("two different kinds are not comparable at all")
+    match dfcell.compare(DfIntCell(1), DfStrCell("a"))
+        Some(_) => test.fail("an int and a string claimed an order")
+        None    => test.assert(true)

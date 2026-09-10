@@ -1,0 +1,166 @@
+// dfsummary.nv — what a frame looks like, in one screen.
+//
+// `describe` IS THE FIRST THING A NOTEBOOK RUNS and the last thing a
+// library should get clever about.  Two shapes, and both are here
+// because they answer different questions:
+//
+//   `of_column`  one column, as a STRUCT with typed fields.  What a
+//                program reads: `s.mean` is a `?Float` and not a cell
+//                to match on.
+//   `describe`   the whole frame, as a FRAME.  What a person reads: it
+//                prints, sorts and joins like anything else, and it
+//                does not need a printer this package would otherwise
+//                have to ship.  pandas returns a frame for the same
+//                reason.
+//
+// EVERY NUMERIC FIELD IS OPTIONAL, and that is the honest shape.  A
+// Str column has no mean; a column with no present values has no
+// minimum; a one-row column has no sample standard deviation.  `?Float`
+// says so at the type, so a caller who forgets is stopped by the
+// compiler rather than by a zero that looked plausible.
+//
+// THE QUANTILES ARE LINEAR-INTERPOLATED, which is numpy's default and
+// therefore what a reader comparing against a Python notebook expects:
+// the value at rank `q*(n-1)` in the sorted present values,
+// interpolating between the two neighbours when that rank is not a
+// whole number.  stats-nv's `quantile` is the same rule over an array,
+// and the two agree by construction because one is defined as the
+// other.
+//
+// THE STANDARD DEVIATION IS THE SAMPLE ONE — divided by `n - 1`.
+// pandas's default, and the one that is right when the rows are a
+// sample of something larger, which they almost always are in a
+// notebook.  stats-nv makes the divisor an argument because a
+// statistics package should; here there is one column of one frame and
+// a second convention would only be a way to get it wrong.
+//
+// NULLS ARE SKIPPED throughout, and `nulls` is how many were —
+// `dfcolumn`'s module comment is the rule.
+
+// One column's summary, with every number that may not exist typed as
+// not existing.
+//
+// ```novo
+// use dfsummary
+//
+// fn main() [io]
+//     match dfsummary.of_column(dfcolumn.ints("n", [1, 2, 3]))
+//         Ok(s)  => println("${s.column}: ${s.count} present")
+//         Err(e) => println(e.message())
+// ```
+pub struct DfSummary
+    // The column's name.
+    column: Str
+    // Which of the four types it holds.
+    kind: DfKind
+    // How many rows, nulls included.
+    rows: Int
+    // How many of them hold a value.
+    count: Int
+    // How many do not.  `rows - count`, spelled out because it is the
+    // number a reader is looking for.
+    nulls: Int
+    // How many DISTINCT present values.  Meaningful at every kind, and
+    // the only interesting number for text.
+    unique: Int
+    // The mean of the present values.  `None` for a Bool or Str
+    // column, and for one with nothing present.
+    mean: ?Float
+    // The SAMPLE standard deviation — divided by `n - 1`.  `None` for
+    // a non-numeric column and for one with fewer than two present
+    // values, where `n - 1` is zero and there is nothing to divide by.
+    sd: ?Float
+    // The smallest present value, as a cell so that text and truths
+    // can have one.  `None` when nothing is present.
+    min: ?DfCell
+    // The 25th percentile of the present values, linear-interpolated.
+    // `None` for a non-numeric column.
+    q25: ?Float
+    // The 50th — the median, on the same rule.
+    median: ?Float
+    // The 75th, on the same rule.
+    q75: ?Float
+    // The largest present value, on `min`'s terms.
+    max: ?DfCell
+
+// One column summarised.
+//
+// Defined at every kind: a Str column gets `rows`, `count`, `nulls`,
+// `unique`, `min` and `max` and nothing else, which is what there is
+// to say about text.
+//
+// ```novo
+// use dfsummary
+//
+// fn main() [io]
+//     match dfsummary.of_column(dfcolumn.floats("w", [1.0, 2.0, 3.0]))
+//         Ok(s)  => println("${s.mean ?? 0.0}")
+//         Err(e) => println(e.message())
+// ```
+pub fn of_column(c: DfColumn) -> Result<DfSummary, DfFault>
+    todo("dataframe-nv.dfsummary.of_column")
+
+// Every column summarised, as a frame.
+//
+// One ROW per column of the input and one column per statistic:
+// `column`, `kind`, `rows`, `count`, `nulls`, `unique`, `mean`, `sd`,
+// `min`, `q25`, `median`, `q75`, `max`.  The numeric statistics are
+// Float columns with a NULL where the statistic does not exist, and
+// `min` and `max` are Str columns through `dfcell.render`, because a
+// frame's column has one type and a minimum over four different
+// columns does not.
+//
+// Rows come out in the input frame's column order.
+//
+// ```novo
+// use dfsummary
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("n", [1, 2, 3])])
+//         Ok(t)  =>
+//             match dfsummary.describe(t)
+//                 Ok(d)  => println("${dftable.rows(d)} row(s), one per column")
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn describe(t: DfTable) -> Result<DfTable, DfFault>
+    todo("dataframe-nv.dfsummary.describe")
+
+// One quantile of one column's present values, linear-interpolated.
+//
+// The rule the summary's `q25`, `median` and `q75` are three cases of,
+// exposed because a notebook wants the 90th and the 99th too.
+// `DfBadRange` for a `q` outside `[0.0, 1.0]`, `DfEmptyGroup` for a
+// column with nothing present, and `DfKindMismatch` for a non-numeric
+// one.
+//
+// ```novo
+// use dfsummary
+//
+// fn main() [io]
+//     match dfsummary.quantile(dfcolumn.floats("w", [1.0, 2.0, 3.0, 4.0]), 0.5)
+//         Ok(v)  => println("${v}")
+//         Err(e) => println(e.message())
+// ```
+pub fn quantile(c: DfColumn, q: Float) -> Result<Float, DfFault>
+    todo("dataframe-nv.dfsummary.quantile")
+
+// How many nulls each column has, as a frame of two columns.
+//
+// The narrow question `describe` answers among fifteen others, on its
+// own because it is the one a notebook asks about a freshly loaded
+// frame before deciding anything else.  Columns: `column` and `nulls`.
+//
+// ```novo
+// use dfsummary
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("n", [1, 2])])
+//         Ok(t)  =>
+//             match dfsummary.null_counts(t)
+//                 Ok(d)  => println("${dftable.names(d)}")
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn null_counts(t: DfTable) -> Result<DfTable, DfFault>
+    todo("dataframe-nv.dfsummary.null_counts")

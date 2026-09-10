@@ -1,0 +1,328 @@
+// dfcolumn_tests.nv — the API suite for one column and the null rule.
+//
+// RED ON PURPOSE: every body is a `todo()`, so each assertion reaches
+// `not implemented: dataframe-nv.dfcolumn.<fn>`.
+//
+// The cases worth reading before the rest are the null ones: an
+// aggregation skips nulls, a numeric conversion refuses them, and a
+// mask reads them as false.  Those three are the rule the whole
+// package is written to, and they are stated in `dfcolumn`'s module
+// comment.
+
+use std.test
+use dfcolumn
+use dfcell
+use ndfloat
+use ndint
+use ndbool
+
+// [1, 2, 3] with no nulls, written out rather than constructed.
+fn ints3() -> DfColumn
+    DfColumn { name: "n", cells: DfIntCells([1, 2, 3]), present: [true, true, true] }
+
+// [1, _, 3] — the middle value missing.
+fn gappy() -> DfColumn
+    DfColumn { name: "n", cells: DfIntCells([1, 0, 3]), present: [true, false, true] }
+
+// Three missing values in a row.
+fn all_null() -> DfColumn
+    DfColumn { name: "n", cells: DfIntCells([0, 0, 0]), present: [false, false, false] }
+
+fn cities() -> DfColumn
+    DfColumn { name: "c",
+        cells: DfStrCells(["oslo", "oslo", "bergen"]),
+        present: [true, true, true] }
+
+@test
+fn test_the_four_constructors_make_columns_with_no_nulls() [io]
+    test.case("floats")
+    let f = dfcolumn.floats("w", [1.0, 2.0])
+    test.assert(dfcolumn.len(f) == 2)
+    test.assert(dfcolumn.null_count(f) == 0)
+    test.assert(dfcell.kind_name(dfcolumn.kind(f)) == "float")
+
+    test.case("ints")
+    test.assert(dfcell.kind_name(dfcolumn.kind(dfcolumn.ints("n", [1]))) == "int")
+
+    test.case("bools")
+    test.assert(dfcell.kind_name(dfcolumn.kind(dfcolumn.bools("ok", [true]))) == "bool")
+
+    test.case("strings")
+    test.assert(dfcell.kind_name(dfcolumn.kind(dfcolumn.strings("c", ["a"]))) == "str")
+
+@test
+fn test_of_cells_builds_from_tagged_values() [io]
+    test.case("a null cell becomes a null position")
+    match dfcolumn.of_cells("n", [DfIntCell(1), DfNullCell, DfIntCell(3)], DfIntKind)
+        Ok(c)  =>
+            test.assert(dfcolumn.len(c) == 3)
+            test.assert(dfcolumn.null_count(c) == 1)
+        Err(e) => test.fail("three int cells failed: ${e.message()}")
+
+    test.case("a cell of the wrong kind stops the call")
+    match dfcolumn.of_cells("n", [DfIntCell(1), DfStrCell("a")], DfIntKind)
+        Ok(_)  => test.fail("a string cell was accepted into an int column")
+        Err(_) => test.assert(true)
+
+@test
+fn test_with_nulls_applies_a_mask_of_the_columns_length() [io]
+    test.case("the marked positions become missing")
+    match dfcolumn.with_nulls(dfcolumn.ints("n", [1, 2, 3]), [true, false, true])
+        Ok(c)  =>
+            test.assert(dfcolumn.null_count(c) == 1)
+            test.assert(dfcolumn.len(c) == 3)
+        Err(e) => test.fail("a legal mask failed: ${e.message()}")
+
+    test.case("a mask of the wrong length is refused")
+    match dfcolumn.with_nulls(dfcolumn.ints("n", [1, 2, 3]), [true])
+        Ok(_)  => test.fail("a one-entry mask was applied to a three-row column")
+        Err(_) => test.assert(true)
+
+@test
+fn test_name_rename_kind_and_len() [io]
+    test.case("a column knows its name")
+    test.assert(dfcolumn.name(ints3()) == "n")
+
+    test.case("rename leaves everything else alone")
+    let r = dfcolumn.rename(ints3(), "count")
+    test.assert(dfcolumn.name(r) == "count")
+    test.assert(dfcolumn.len(r) == 3)
+
+    test.case("len counts the nulls too")
+    test.assert(dfcolumn.len(gappy()) == 3)
+    test.assert(dfcolumn.null_count(gappy()) == 1)
+
+@test
+fn test_is_null_cell_and_cells_of_read_one_row_and_all_of_them() [io]
+    test.case("is_null answers per row")
+    match dfcolumn.is_null(gappy(), 1)
+        Ok(b)  => test.assert(b)
+        Err(e) => test.fail("is_null failed: ${e.message()}")
+    match dfcolumn.is_null(gappy(), 0)
+        Ok(b)  => test.assert(b == false)
+        Err(e) => test.fail("is_null failed: ${e.message()}")
+
+    test.case("a row off the end is refused")
+    match dfcolumn.is_null(gappy(), 9)
+        Ok(_)  => test.fail("row 9 of a 3-row column answered")
+        Err(_) => test.assert(true)
+
+    test.case("a missing row reads as the null cell, not as a zero")
+    match dfcolumn.cell(gappy(), 1)
+        Ok(v)  => test.assert(dfcell.render(v) == "")
+        Err(e) => test.fail("cell failed: ${e.message()}")
+
+    test.case("cells_of is one cell per row")
+    test.assert(list.len(dfcolumn.cells_of(gappy())) == 3)
+
+@test
+fn test_filter_and_take_select_rows() [io]
+    test.case("filter keeps what the mask marks")
+    match ndbool.of_list([true, false, true], [3])
+        Ok(m)  =>
+            match dfcolumn.filter(ints3(), m)
+                Ok(c)  => test.assert(dfcolumn.len(c) == 2)
+                Err(e) => test.fail("filter failed: ${e.message()}")
+        Err(e) => test.fail("of_list failed: ${e.message()}")
+
+    test.case("a mask of the wrong length is refused")
+    match ndbool.of_list([true], [1])
+        Ok(m)  =>
+            match dfcolumn.filter(ints3(), m)
+                Ok(_)  => test.fail("a one-entry mask filtered a three-row column")
+                Err(_) => test.assert(true)
+        Err(e) => test.fail("of_list failed: ${e.message()}")
+
+    test.case("take gathers in the order given, and may repeat")
+    match dfcolumn.take(ints3(), [2, 0, 2])
+        Ok(c)  => test.assert(dfcolumn.len(c) == 3)
+        Err(e) => test.fail("take failed: ${e.message()}")
+
+    test.case("a position off the end is refused")
+    match dfcolumn.take(ints3(), [9])
+        Ok(_)  => test.fail("row 9 of a 3-row column was gathered")
+        Err(_) => test.assert(true)
+
+@test
+fn test_to_floats_refuses_a_null_and_to_floats_or_fills_it() [io]
+    test.case("a complete numeric column converts")
+    match dfcolumn.to_floats(dfcolumn.floats("w", [1.0, 2.0]))
+        Ok(a)  => test.assert(ndfloat.sum(a) == 3.0)
+        Err(e) => test.fail("a complete column failed to convert: ${e.message()}")
+
+    test.case("an int column widens")
+    match dfcolumn.to_floats(ints3())
+        Ok(a)  => test.assert(ndfloat.sum(a) == 6.0)
+        Err(e) => test.fail("an int column failed to widen: ${e.message()}")
+
+    test.case("a null STOPS the conversion — it does not become a NaN")
+    match dfcolumn.to_floats(gappy())
+        Ok(_)  => test.fail("a column with a null converted silently")
+        Err(e) =>
+            match e
+                DfNullInNumeric(name, nulls) =>
+                    test.assert(name == "n")
+                    test.assert(nulls == 1)
+                _                            => test.fail("a null in a conversion reported something else")
+
+    test.case("the fill is a value the caller has to name")
+    match dfcolumn.to_floats_or(gappy(), 0.0)
+        Ok(a)  => test.assert(ndfloat.sum(a) == 4.0)
+        Err(e) => test.fail("a filled conversion failed: ${e.message()}")
+
+    test.case("text does not convert at all")
+    match dfcolumn.to_floats(cities())
+        Ok(_)  => test.fail("a text column converted to numbers")
+        Err(_) => test.assert(true)
+
+@test
+fn test_to_ints_does_not_narrow_a_float_column() [io]
+    test.case("an int column converts")
+    match dfcolumn.to_ints(ints3())
+        Ok(a)  => test.assert(ndint.sum(a) == 6)
+        Err(e) => test.fail("to_ints failed: ${e.message()}")
+
+    test.case("a float column is refused rather than rounded")
+    match dfcolumn.to_ints(dfcolumn.floats("w", [1.7, 2.2]))
+        Ok(_)  => test.fail("a float column narrowed to ints without being asked")
+        Err(e) =>
+            match e
+                DfKindMismatch(_, _) => test.assert(true)
+                _                    => test.fail("to_ints on floats reported something else")
+
+@test
+fn test_mask_reads_a_null_as_false_and_present_mask_finds_the_values() [io]
+    test.case("a bool column becomes a mask")
+    match dfcolumn.mask(dfcolumn.bools("ok", [true, false, true]))
+        Ok(m)  => test.assert(ndbool.count(m) == 2)
+        Err(e) => test.fail("mask failed: ${e.message()}")
+
+    test.case("a null in a predicate column is FALSE — unknown is not keep")
+    let nullable = DfColumn { name: "ok", cells: DfBoolCells([true, true, true]), present: [true, false, true] }
+    match dfcolumn.mask(nullable)
+        Ok(m)  => test.assert(ndbool.count(m) == 2)
+        Err(e) => test.fail("mask failed: ${e.message()}")
+
+    test.case("a non-bool column has no mask")
+    match dfcolumn.mask(ints3())
+        Ok(_)  => test.fail("an int column produced a mask")
+        Err(_) => test.assert(true)
+
+    test.case("present_mask marks the rows that hold a value")
+    test.assert(ndbool.count(dfcolumn.present_mask(gappy())) == 2)
+    test.assert(ndbool.count(dfcolumn.present_mask(all_null())) == 0)
+
+@test
+fn test_of_floats_and_of_ints_come_back_from_an_array() [io]
+    test.case("a rank-1 float array becomes a named column")
+    match ndfloat.of_list([1.0, 2.0], [2])
+        Ok(a)  =>
+            match dfcolumn.of_floats("w", a)
+                Ok(c)  =>
+                    test.assert(dfcolumn.name(c) == "w")
+                    test.assert(dfcolumn.null_count(c) == 0)
+                Err(e) => test.fail("of_floats failed: ${e.message()}")
+        Err(e) => test.fail("of_list failed: ${e.message()}")
+
+    test.case("a rank-1 int array becomes a named column")
+    match ndint.of_list([1, 2], [2])
+        Ok(a)  =>
+            match dfcolumn.of_ints("n", a)
+                Ok(c)  => test.assert(dfcolumn.len(c) == 2)
+                Err(e) => test.fail("of_ints failed: ${e.message()}")
+        Err(e) => test.fail("of_list failed: ${e.message()}")
+
+    test.case("a matrix is not a column — a column is a sequence")
+    match ndfloat.of_list([1.0, 2.0, 3.0, 4.0], [2, 2])
+        Ok(a)  =>
+            match dfcolumn.of_floats("w", a)
+                Ok(_)  => test.fail("a rank-2 array became a column")
+                Err(_) => test.assert(true)
+        Err(e) => test.fail("of_list failed: ${e.message()}")
+
+@test
+fn test_cast_moves_between_kinds_and_says_when_it_can_introduce_nulls() [io]
+    test.case("int widens to float exactly")
+    match dfcolumn.cast(ints3(), DfFloatKind)
+        Ok(c)  => test.assert(dfcell.kind_name(dfcolumn.kind(c)) == "float")
+        Err(e) => test.fail("cast to float failed: ${e.message()}")
+
+    test.case("float narrows to int by truncation, because it was asked to")
+    match dfcolumn.cast(dfcolumn.floats("w", [1.7, -1.7]), DfIntKind)
+        Ok(c)  => test.assert(dfcell.kind_name(dfcolumn.kind(c)) == "int")
+        Err(e) => test.fail("cast to int failed: ${e.message()}")
+
+    test.case("anything casts to text")
+    match dfcolumn.cast(ints3(), DfStrKind)
+        Ok(c)  => test.assert(dfcell.kind_name(dfcolumn.kind(c)) == "str")
+        Err(e) => test.fail("cast to str failed: ${e.message()}")
+
+    test.case("text that does not parse becomes a NULL — the one cast that can")
+    match dfcolumn.cast(cities(), DfIntKind)
+        Ok(c)  => test.assert(dfcolumn.null_count(c) == 3)
+        Err(e) => test.fail("cast from str failed: ${e.message()}")
+
+@test
+fn test_the_aggregations_skip_nulls() [io]
+    test.case("count is how many are PRESENT, not how many rows")
+    test.assert(dfcolumn.count(ints3()) == 3)
+    test.assert(dfcolumn.count(gappy()) == 2)
+    test.assert(dfcolumn.count(all_null()) == 0)
+
+    test.case("sum totals the present values")
+    match dfcolumn.sum(gappy())
+        Ok(v)  => test.assert(dfcell.render(v) == "4")
+        Err(e) => test.fail("sum failed: ${e.message()}")
+
+    test.case("the sum of nothing is the type's zero and needs no error")
+    match dfcolumn.sum(all_null())
+        Ok(v)  => test.assert(dfcell.render(v) == "0")
+        Err(e) => test.fail("the empty sum failed: ${e.message()}")
+
+    test.case("mean divides by how many were present, not by how many rows")
+    match dfcolumn.mean(gappy())
+        Ok(v)  => test.assert(v == 2.0)
+        Err(e) => test.fail("mean failed: ${e.message()}")
+
+    test.case("the mean of nothing has no value")
+    match dfcolumn.mean(all_null())
+        Ok(_)  => test.fail("the mean of an all-null column answered")
+        Err(e) =>
+            match e
+                DfEmptyGroup(what) => test.assert(what == "mean")
+                _                  => test.fail("an empty mean reported something else")
+
+    test.case("a null is never the smallest or the largest")
+    match dfcolumn.min(gappy())
+        Ok(v)  => test.assert(dfcell.render(v) == "1")
+        Err(e) => test.fail("min failed: ${e.message()}")
+    match dfcolumn.max(gappy())
+        Ok(v)  => test.assert(dfcell.render(v) == "3")
+        Err(e) => test.fail("max failed: ${e.message()}")
+
+    test.case("min and max are defined over text too")
+    match dfcolumn.min(cities())
+        Ok(v)  => test.assert(dfcell.render(v) == "bergen")
+        Err(e) => test.fail("min over text failed: ${e.message()}")
+
+    test.case("min and max of nothing have no value")
+    match dfcolumn.min(all_null())
+        Ok(_)  => test.fail("the min of an all-null column answered")
+        Err(_) => test.assert(true)
+    match dfcolumn.max(all_null())
+        Ok(_)  => test.fail("the max of an all-null column answered")
+        Err(_) => test.assert(true)
+
+    test.case("a mean of text is a kind mismatch, not an empty group")
+    match dfcolumn.mean(cities())
+        Ok(_)  => test.fail("a text column had a mean")
+        Err(_) => test.assert(true)
+
+@test
+fn test_unique_count_ignores_nulls_and_repeats() [io]
+    test.case("two of three cities are distinct")
+    test.assert(dfcolumn.unique_count(cities()) == 2)
+
+    test.case("nulls do not count as a distinct value")
+    test.assert(dfcolumn.unique_count(gappy()) == 2)
+    test.assert(dfcolumn.unique_count(all_null()) == 0)

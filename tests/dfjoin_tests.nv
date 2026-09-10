@@ -1,0 +1,160 @@
+// dfjoin_tests.nv — the API suite for a join.
+//
+// RED ON PURPOSE: every body is a `todo()`, so each assertion reaches
+// `not implemented: dataframe-nv.dfjoin.<fn>`.
+//
+// The case worth reading before the rest is the null key: it matches
+// NOTHING, not even another null.  That is SQL's rule and this
+// package's, and it is what keeps a join from inventing rows.
+
+use std.test
+use dfjoin
+use dftable
+use dfcolumn
+
+// ids 1 and 2, with a name each.
+fn left() -> DfTable
+    let id = DfColumn { name: "id", cells: DfIntCells([1, 2]), present: [true, true] }
+    let name = DfColumn { name: "name", cells: DfStrCells(["a", "b"]), present: [true, true] }
+    DfTable { columns: [id, name], rows: 2 }
+
+// ids 1 and 3, with a value each — so 1 matches and 2 and 3 do not.
+fn right() -> DfTable
+    let id = DfColumn { name: "id", cells: DfIntCells([1, 3]), present: [true, true] }
+    let value = DfColumn { name: "value", cells: DfIntCells([10, 30]), present: [true, true] }
+    DfTable { columns: [id, value], rows: 2 }
+
+// The left frame with the second id missing.
+fn left_null_key() -> DfTable
+    let id = DfColumn { name: "id", cells: DfIntCells([1, 0]), present: [true, false] }
+    let name = DfColumn { name: "name", cells: DfStrCells(["a", "b"]), present: [true, true] }
+    DfTable { columns: [id, name], rows: 2 }
+
+// A right frame whose key is also missing, to prove null does not
+// match null.
+fn right_null_key() -> DfTable
+    DfTable { columns: [DfColumn { name: "id", cells: DfIntCells([0]), present: [false] },
+                        DfColumn { name: "value", cells: DfIntCells([99]), present: [true] }],
+        rows: 1 }
+
+@test
+fn test_an_inner_join_keeps_only_the_matches() [io]
+    test.case("one id in common")
+    match dfjoin.join(left(), right(), "id", DfInnerJoin)
+        Ok(j)  => test.assert(dftable.rows(j) == 1)
+        Err(e) => test.fail("an inner join failed: ${e.message()}")
+
+    test.case("the key appears ONCE, from the left")
+    match dfjoin.join(left(), right(), "id", DfInnerJoin)
+        Ok(j)  => test.assert(dftable.names(j) == ["id", "name", "value"])
+        Err(e) => test.fail("an inner join failed: ${e.message()}")
+
+    test.case("a key column neither side has is refused")
+    match dfjoin.join(left(), right(), "region", DfInnerJoin)
+        Ok(_)  => test.fail("a join on an absent column succeeded")
+        Err(_) => test.assert(true)
+
+@test
+fn test_a_left_join_keeps_every_left_row() [io]
+    test.case("both left rows survive")
+    match dfjoin.join(left(), right(), "id", DfLeftJoin)
+        Ok(j)  => test.assert(dftable.rows(j) == 2)
+        Err(e) => test.fail("a left join failed: ${e.message()}")
+
+    test.case("the unmatched row's right columns are NULL, not zero")
+    match dfjoin.join(left(), right(), "id", DfLeftJoin)
+        Ok(j)  =>
+            match dftable.column(j, "value")
+                Ok(c)  => test.assert(dfcolumn.null_count(c) == 1)
+                Err(e) => test.fail("the right column was missing: ${e.message()}")
+        Err(e) => test.fail("a left join failed: ${e.message()}")
+
+@test
+fn test_a_null_key_matches_nothing_including_another_null() [io]
+    test.case("an inner join drops a null-keyed left row")
+    match dfjoin.join(left_null_key(), right(), "id", DfInnerJoin)
+        Ok(j)  => test.assert(dftable.rows(j) == 1)
+        Err(e) => test.fail("an inner join failed: ${e.message()}")
+
+    test.case("two nulls do NOT find each other")
+    match dfjoin.join(left_null_key(), right_null_key(), "id", DfInnerJoin)
+        Ok(j)  => test.assert(dftable.rows(j) == 0)
+        Err(e) => test.fail("an inner join failed: ${e.message()}")
+
+    test.case("a left join keeps the null-keyed row, unmatched")
+    match dfjoin.join(left_null_key(), right_null_key(), "id", DfLeftJoin)
+        Ok(j)  =>
+            test.assert(dftable.rows(j) == 2)
+            match dftable.column(j, "value")
+                Ok(c)  => test.assert(dfcolumn.null_count(c) == 2)
+                Err(e) => test.fail("the right column was missing: ${e.message()}")
+        Err(e) => test.fail("a left join failed: ${e.message()}")
+
+@test
+fn test_join_on_matches_differently_named_keys() [io]
+    test.case("the key comes out under the LEFT name")
+    match dftable.rename(right(), "id", "customer")
+        Ok(r)  =>
+            match dfjoin.join_on(left(), r, "id", "customer", DfInnerJoin)
+                Ok(j)  => test.assert(dftable.names(j) == ["id", "name", "value"])
+                Err(e) => test.fail("join_on failed: ${e.message()}")
+        Err(e) => test.fail("rename failed: ${e.message()}")
+
+    test.case("two key columns of different types are a mistake, not a conversion")
+    match dftable.of_columns([dfcolumn.strings("id", ["1"]), dfcolumn.ints("value", [10])])
+        Ok(r)  =>
+            match dfjoin.join(left(), r, "id", DfInnerJoin)
+                Ok(_)  => test.fail("an int key joined a str key")
+                Err(e) =>
+                    match e
+                        DfKindMismatch(_, _) => test.assert(true)
+                        _                    => test.fail("a key kind mismatch reported something else")
+        Err(e) => test.fail("of_columns failed: ${e.message()}")
+
+@test
+fn test_a_colliding_column_gets_a_suffix_the_caller_can_name() [io]
+    test.case("the default suffix keeps both columns")
+    match dfjoin.join(left(), left(), "id", DfInnerJoin)
+        Ok(j)  => test.assert(dftable.names(j) == ["id", "name", "name_right"])
+        Err(e) => test.fail("a self-join failed: ${e.message()}")
+
+    test.case("the caller can pick a different one")
+    match dfjoin.join_with_suffix(left(), left(), "id", "id", DfInnerJoin, "_b")
+        Ok(j)  => test.assert(dftable.names(j) == ["id", "name", "name_b"])
+        Err(e) => test.fail("join_with_suffix failed: ${e.message()}")
+
+    test.case("an empty suffix makes a collision an error instead of a rename")
+    match dfjoin.join_with_suffix(left(), left(), "id", "id", DfInnerJoin, "")
+        Ok(_)  => test.fail("an empty suffix renamed silently")
+        Err(_) => test.assert(true)
+
+@test
+fn test_join_positions_answers_with_the_pairs_and_no_frame() [io]
+    test.case("two lists, one per side")
+    match dfjoin.join_positions(left(), right(), "id", "id", DfInnerJoin)
+        Ok(p)  => test.assert(list.len(p) == 2)
+        Err(e) => test.fail("join_positions failed: ${e.message()}")
+
+    test.case("the pairs are the matching rows")
+    match dfjoin.join_positions(left(), right(), "id", "id", DfInnerJoin)
+        Ok(p)  =>
+            test.assert((list.get(p, 0) ?? []) == [0])
+            test.assert((list.get(p, 1) ?? []) == [0])
+        Err(e) => test.fail("join_positions failed: ${e.message()}")
+
+    test.case("a left join marks an unmatched right side with -1")
+    match dfjoin.join_positions(left(), right(), "id", "id", DfLeftJoin)
+        Ok(p)  =>
+            test.assert((list.get(p, 0) ?? []) == [0, 1])
+            test.assert((list.get(p, 1) ?? []) == [0, -1])
+        Err(e) => test.fail("join_positions failed: ${e.message()}")
+
+@test
+fn test_a_one_to_many_join_duplicates_left_rows() [io]
+    test.case("two right rows for one left key make two result rows")
+    match dftable.of_columns([dfcolumn.ints("id", [1, 1]), dfcolumn.ints("value", [10, 11])])
+        Ok(r)  =>
+            match dfjoin.join(left(), r, "id", DfInnerJoin)
+                Ok(j)  => test.assert(dftable.rows(j) == 2)
+                Err(e) => test.fail("a one-to-many join failed: ${e.message()}")
+        Err(e) => test.fail("of_columns failed: ${e.message()}")

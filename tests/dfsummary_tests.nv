@@ -1,0 +1,251 @@
+// dfsummary_tests.nv — the API suite for describe, and for the csv
+// bridge.
+//
+// RED ON PURPOSE: every body is a `todo()`, so each assertion reaches
+// `not implemented: dataframe-nv.<module>.<fn>`.
+//
+// The shape being pinned down here is that every number that may not
+// exist is typed as not existing — a Str column has no mean, a
+// one-value column has no sample standard deviation — so a caller who
+// forgets is stopped by the compiler rather than by a plausible zero.
+
+use std.test
+use dfsummary
+use dfcsv
+use dftable
+use dfcolumn
+use dfcell
+
+fn quartiles() -> DfColumn
+    DfColumn { name: "w",
+        cells: DfFloatCells([1.0, 2.0, 3.0, 4.0]),
+        present: [true, true, true, true] }
+
+fn one_value() -> DfColumn
+    DfColumn { name: "w", cells: DfFloatCells([1.0]), present: [true] }
+
+fn cities() -> DfColumn
+    DfColumn { name: "c",
+        cells: DfStrCells(["oslo", "oslo", "bergen"]),
+        present: [true, true, true] }
+
+fn gappy() -> DfColumn
+    DfColumn { name: "n", cells: DfIntCells([1, 0, 3]), present: [true, false, true] }
+
+@test
+fn test_of_column_counts_rows_present_and_missing() [io]
+    test.case("a complete column")
+    match dfsummary.of_column(quartiles())
+        Ok(s)  =>
+            test.assert(s.column == "w")
+            test.assert(s.rows == 4)
+            test.assert(s.count == 4)
+            test.assert(s.nulls == 0)
+        Err(e) => test.fail("of_column failed: ${e.message()}")
+
+    test.case("nulls is rows minus count, spelled out")
+    match dfsummary.of_column(gappy())
+        Ok(s)  =>
+            test.assert(s.rows == 3)
+            test.assert(s.count == 2)
+            test.assert(s.nulls == 1)
+        Err(e) => test.fail("of_column failed: ${e.message()}")
+
+    test.case("unique ignores repeats and nulls")
+    match dfsummary.of_column(cities())
+        Ok(s)  => test.assert(s.unique == 2)
+        Err(e) => test.fail("of_column failed: ${e.message()}")
+
+@test
+fn test_a_text_column_has_no_mean_and_says_so_in_the_type() [io]
+    test.case("no mean, no sd, no quantiles")
+    match dfsummary.of_column(cities())
+        Ok(s)  =>
+            match s.mean
+                Some(_) => test.fail("a text column reported a mean")
+                None    => test.assert(true)
+            match s.sd
+                Some(_) => test.fail("a text column reported a standard deviation")
+                None    => test.assert(true)
+            match s.median
+                Some(_) => test.fail("a text column reported a median")
+                None    => test.assert(true)
+        Err(e) => test.fail("of_column failed: ${e.message()}")
+
+    test.case("but it does have a smallest and a largest value")
+    match dfsummary.of_column(cities())
+        Ok(s)  =>
+            match s.min
+                Some(c) => test.assert(dfcell.render(c) == "bergen")
+                None    => test.fail("a text column reported no minimum")
+        Err(e) => test.fail("of_column failed: ${e.message()}")
+
+@test
+fn test_the_sample_standard_deviation_needs_two_values() [io]
+    test.case("four values have one")
+    match dfsummary.of_column(quartiles())
+        Ok(s)  =>
+            match s.sd
+                Some(v) => test.assert(v > 1.29)
+                None    => test.fail("four values reported no standard deviation")
+        Err(e) => test.fail("of_column failed: ${e.message()}")
+
+    test.case("one value does not — n minus 1 is zero")
+    match dfsummary.of_column(one_value())
+        Ok(s)  =>
+            match s.sd
+                Some(_) => test.fail("one value reported a sample standard deviation")
+                None    => test.assert(true)
+        Err(e) => test.fail("of_column failed: ${e.message()}")
+
+    test.case("one value still has a mean")
+    match dfsummary.of_column(one_value())
+        Ok(s)  =>
+            match s.mean
+                Some(v) => test.assert(v == 1.0)
+                None    => test.fail("one value reported no mean")
+        Err(e) => test.fail("of_column failed: ${e.message()}")
+
+@test
+fn test_the_quantiles_interpolate_linearly() [io]
+    test.case("the median of four values is between the middle two")
+    match dfsummary.quantile(quartiles(), 0.5)
+        Ok(v)  => test.assert(v == 2.5)
+        Err(e) => test.fail("quantile failed: ${e.message()}")
+
+    test.case("the ends are the ends")
+    match dfsummary.quantile(quartiles(), 0.0)
+        Ok(v)  => test.assert(v == 1.0)
+        Err(e) => test.fail("quantile failed: ${e.message()}")
+    match dfsummary.quantile(quartiles(), 1.0)
+        Ok(v)  => test.assert(v == 4.0)
+        Err(e) => test.fail("quantile failed: ${e.message()}")
+
+    test.case("the summary's three quantiles are three cases of the same rule")
+    match dfsummary.of_column(quartiles())
+        Ok(s)  =>
+            match s.q25
+                Some(v) => test.assert(v == 1.75)
+                None    => test.fail("q25 was missing on a complete numeric column")
+            match s.q75
+                Some(v) => test.assert(v == 3.25)
+                None    => test.fail("q75 was missing on a complete numeric column")
+        Err(e) => test.fail("of_column failed: ${e.message()}")
+
+    test.case("a quantile outside zero to one names nothing")
+    match dfsummary.quantile(quartiles(), 1.5)
+        Ok(_)  => test.fail("a quantile of 1.5 answered")
+        Err(_) => test.assert(true)
+
+    test.case("a text column has no quantile")
+    match dfsummary.quantile(cities(), 0.5)
+        Ok(_)  => test.fail("a text column had a median")
+        Err(_) => test.assert(true)
+
+@test
+fn test_describe_answers_with_a_frame_one_row_per_column() [io]
+    test.case("one row per input column, in input order")
+    match dftable.of_columns([dfcolumn.ints("n", [1, 2, 3]), dfcolumn.strings("c", ["a", "b", "c"])])
+        Ok(t)  =>
+            match dfsummary.describe(t)
+                Ok(d)  => test.assert(dftable.rows(d) == 2)
+                Err(e) => test.fail("describe failed: ${e.message()}")
+        Err(e) => test.fail("of_columns failed: ${e.message()}")
+
+    test.case("the statistics are the columns")
+    match dftable.of_columns([dfcolumn.ints("n", [1, 2, 3])])
+        Ok(t)  =>
+            match dfsummary.describe(t)
+                Ok(d)  =>
+                    test.assert(dftable.has(d, "column"))
+                    test.assert(dftable.has(d, "mean"))
+                    test.assert(dftable.has(d, "median"))
+                    test.assert(dftable.has(d, "nulls"))
+                Err(e) => test.fail("describe failed: ${e.message()}")
+        Err(e) => test.fail("of_columns failed: ${e.message()}")
+
+@test
+fn test_null_counts_is_the_narrow_question_on_its_own() [io]
+    test.case("two columns: the name and how many are missing")
+    match dftable.of_columns([dfcolumn.ints("n", [1, 2])])
+        Ok(t)  =>
+            match dfsummary.null_counts(t)
+                Ok(d)  =>
+                    test.assert(dftable.names(d) == ["column", "nulls"])
+                    test.assert(dftable.rows(d) == 1)
+                Err(e) => test.fail("null_counts failed: ${e.message()}")
+        Err(e) => test.fail("of_columns failed: ${e.message()}")
+
+@test
+fn test_of_records_reads_csv_nvs_own_values() [io]
+    test.case("a header and one record")
+    let h = Header { names: ["n", "c"] }
+    let r = [Row { fields: ["1", "a"], line: 2, index: 0 }]
+    match dfcsv.of_records(h, r, [DfIntKind, DfStrKind])
+        Ok(t)  =>
+            test.assert(dftable.rows(t) == 1)
+            test.assert(dftable.names(t) == ["n", "c"])
+        Err(e) => test.fail("of_records failed: ${e.message()}")
+
+    test.case("a record that is not as wide as the header stops the load")
+    match dfcsv.of_records(Header { names: ["n", "c"] },
+                           [Row { fields: ["1"], line: 2, index: 0 }],
+                           [DfIntKind, DfStrKind])
+        Ok(_)  => test.fail("a one-field record loaded against a two-name header")
+        Err(_) => test.assert(true)
+
+    test.case("a repeated header name cannot be a frame")
+    match dfcsv.of_records(Header { names: ["n", "n"] },
+                           [Row { fields: ["1", "2"], line: 2, index: 0 }],
+                           [DfIntKind, DfIntKind])
+        Ok(_)  => test.fail("a header with two `n` columns made a frame")
+        Err(_) => test.assert(true)
+
+@test
+fn test_infer_kinds_can_be_inspected_before_it_is_used() [io]
+    test.case("one kind per header name")
+    let h = Header { names: ["n", "c"] }
+    let r = [Row { fields: ["1", "a"], line: 2, index: 0 }]
+    match dfcsv.infer_kinds(h, r)
+        Ok(ks) =>
+            test.assert(list.len(ks) == 2)
+            test.assert(dfcell.kind_name(list.get(ks, 0) ?? DfStrKind) == "int")
+            test.assert(dfcell.kind_name(list.get(ks, 1) ?? DfIntKind) == "str")
+        Err(e) => test.fail("infer_kinds failed: ${e.message()}")
+
+    test.case("the inferred load agrees with the inspected kinds")
+    match dfcsv.of_records_inferred(Header { names: ["n"] },
+                                    [Row { fields: ["1"], line: 2, index: 0 }])
+        Ok(t)  =>
+            match dftable.column(t, "n")
+                Ok(c)  => test.assert(dfcell.kind_name(dfcolumn.kind(c)) == "int")
+                Err(e) => test.fail("column failed: ${e.message()}")
+        Err(e) => test.fail("of_records_inferred failed: ${e.message()}")
+
+@test
+fn test_to_records_and_header_of_go_back_out() [io]
+    test.case("one record per row")
+    match dftable.of_columns([dfcolumn.ints("n", [1, 2])])
+        Ok(t)  => test.assert(list.len(dfcsv.to_records(t)) == 2)
+        Err(e) => test.fail("of_columns failed: ${e.message()}")
+
+    test.case("the header is the column names")
+    match dftable.of_columns([dfcolumn.ints("n", [1]), dfcolumn.strings("c", ["a"])])
+        Ok(t)  => test.assert(dfcsv.header_of(t).names == ["n", "c"])
+        Err(e) => test.fail("of_columns failed: ${e.message()}")
+
+    test.case("the record numbering is what csv-nv's reader would have produced")
+    match dftable.of_columns([dfcolumn.ints("n", [1, 2])])
+        Ok(t)  =>
+            let rs = dfcsv.to_records(t)
+            match list.get(rs, 0)
+                // The binder is re-bound through an annotation: a
+                // `Some` from `list.get` over a list of structs does
+                // not carry its struct type into a field read, and the
+                // annotation is what supplies it.
+                Some(first) =>
+                    let r: Row = first
+                    test.assert(r.line == 2)
+                    test.assert(r.index == 0)
+                None        => test.fail("the first record was missing")
+        Err(e) => test.fail("of_columns failed: ${e.message()}")

@@ -1,0 +1,155 @@
+// dfjoin.nv — two frames matched on one key.
+//
+// TWO KINDS AND NOT SEVEN.  Inner and left.  A right join is a left
+// join with the arguments swapped and the columns reordered, which the
+// caller can write in one line and which is one fewer thing for this
+// package to get wrong; a full outer join needs a rule for a row that
+// matched on neither side and a decision about column order that no
+// two libraries agree on; a cross join is not a join on a key at all.
+// The measured subset is inner and left, and it stays that way until a
+// notebook is blocked.
+//
+// ONE KEY COLUMN AND NOT SEVERAL.  A compound key is a column the
+// caller makes — `cast` both parts to Str and concatenate, or number
+// the distinct pairs — and doing that explicitly is clearer at the
+// call site than a key list whose two sides have to line up by
+// position.  It is also the honest measurement: notebook corpora join
+// on one column.
+//
+// A NULL KEY MATCHES NOTHING, including another null.  That is SQL's
+// rule and this package's, and it is the same rule stated in
+// `dfcolumn`'s module comment: two rows whose region is unknown are
+// not thereby in the same region.  In an inner join a null-keyed row
+// on either side simply does not appear; in a left join it appears
+// with every right column null, exactly as an unmatched row does.
+//
+// THE OUTPUT ORDER IS THE LEFT FRAME'S, then the matches within each
+// left row in the right frame's order.  So a join of an already-sorted
+// left frame stays sorted, and a one-to-one join does not need a sort
+// afterwards.
+//
+// A ONE-TO-MANY JOIN DUPLICATES LEFT ROWS, as every join does.  The
+// result's row count is the number of matching pairs and can exceed
+// both inputs; that is not an error and is not warned about, but it is
+// the thing to check first when a joined frame is unexpectedly large.
+
+// Which rows survive a join.
+//
+// ```novo
+// use dfjoin
+//
+// fn main() [io]
+//     println("${DfInnerJoin == DfInnerJoin}")
+// ```
+pub enum DfJoinKind
+    // Only rows whose key is present on both sides.
+    DfInnerJoin
+    // Every left row, with the right columns null where nothing
+    // matched.  A left row with a null key is kept and unmatched, for
+    // the reason in the module comment.
+    DfLeftJoin
+
+// Two frames joined on a column of the same name in both.
+//
+// The common case, and the one a notebook writes.  `join_on` is the
+// same thing when the two columns are named differently.
+//
+// The result carries every left column, then every right column except
+// the key — which appears once, from the left, because two identical
+// columns side by side is never what was wanted.  A right column whose
+// name collides with a left one gets `_right` appended;
+// `join_with_suffix` is how a caller picks a different one.
+//
+// `DfNoSuchColumn` when either side lacks the key, and
+// `DfKindMismatch` when the two key columns are different types — a
+// join between an Int id and a Str id is a mistake, not a conversion
+// this package should perform.
+//
+// ```novo
+// use dfjoin
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("id", [1, 2])])
+//         Ok(l)  =>
+//             match dfjoin.join(l, l, "id", DfInnerJoin)
+//                 Ok(j)  => println("${dftable.rows(j)}")
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn join(left: DfTable, right: DfTable, on: Str, how: DfJoinKind) -> Result<DfTable, DfFault>
+    todo("dataframe-nv.dfjoin.join")
+
+// Two frames joined on differently named key columns.
+//
+// The key appears once in the result, under the LEFT column's name.
+// Everything else is `join`'s rule.
+//
+// ```novo
+// use dfjoin
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("id", [1, 2])])
+//         Ok(l)  =>
+//             match dftable.of_columns([dfcolumn.ints("customer", [1, 3])])
+//                 Ok(r)  =>
+//                     match dfjoin.join_on(l, r, "id", "customer", DfLeftJoin)
+//                         Ok(j)  => println("${dftable.rows(j)}")
+//                         Err(e) => println(e.message())
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn join_on(left: DfTable, right: DfTable, left_on: Str, right_on: Str,
+               how: DfJoinKind) -> Result<DfTable, DfFault>
+    todo("dataframe-nv.dfjoin.join_on")
+
+// `join_on` with the collision suffix named.
+//
+// The whole reason this exists separately: `_right` is a default, not
+// a decision, and a frame whose columns already end in `_right`
+// deserves to say so rather than to get `_right_right`.  An empty
+// suffix makes a collision `DfDuplicateColumn` instead of renaming —
+// which is the strict reading, and the one a pipeline that must not
+// silently rename should ask for.
+//
+// ```novo
+// use dfjoin
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("id", [1])])
+//         Ok(l)  =>
+//             match dfjoin.join_with_suffix(l, l, "id", "id", DfInnerJoin, "_b")
+//                 Ok(j)  => println("${dftable.names(j)}")
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn join_with_suffix(left: DfTable, right: DfTable, left_on: Str, right_on: Str, how: DfJoinKind,
+                        suffix: Str) -> Result<DfTable, DfFault>
+    todo("dataframe-nv.dfjoin.join_with_suffix")
+
+// The matching row positions, as two lists, without building a frame.
+//
+// What a join computes on the way.  `left_positions[i]` and
+// `right_positions[i]` are the `i`-th matching pair; in a left join an
+// unmatched left row carries -1 on the right, which is the one place
+// this package uses a sentinel rather than an option — a `[?Int]`
+// would box every position of every matched row to describe the
+// unmatched few.
+//
+// It is `pub` because a caller who wants to join and then take only
+// some columns can do the gather themselves and skip building the wide
+// frame first.
+//
+// ```novo
+// use dfjoin
+//
+// fn main() [io]
+//     match dftable.of_columns([dfcolumn.ints("id", [1, 2])])
+//         Ok(l)  =>
+//             match dfjoin.join_positions(l, l, "id", "id", DfInnerJoin)
+//                 Ok(p)  => println("${list.len(p)}")
+//                 Err(e) => println(e.message())
+//         Err(e) => println(e.message())
+// ```
+pub fn join_positions(left: DfTable, right: DfTable, left_on: Str, right_on: Str,
+                      how: DfJoinKind) -> Result<[[Int]], DfFault>
+    todo("dataframe-nv.dfjoin.join_positions")
