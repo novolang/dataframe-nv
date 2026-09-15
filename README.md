@@ -192,10 +192,10 @@ The rest:
 - **A join on more than one column.** Combine the keys into one column
   first.
 - **Printing.** See "How to choose an entry point".
-- **A microcontroller build.** A frame exists to hold more data than
-  fits in a person's head, and `describe` allocates a second frame to
-  report on the first. This package makes no device claim and ships no
-  device probe.
+- **A microcontroller build.** A frame exists to hold more data than fits in a
+  person's head, and `describe` allocates a second frame to report on the
+  first. Nothing here is claimed to build for a device with no heap allocator,
+  and there is no `tests/embedded_probe.nv`.
 
 ## Related packages
 
