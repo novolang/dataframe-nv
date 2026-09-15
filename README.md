@@ -1,179 +1,272 @@
 # dataframe-nv
 
-**Status: NOT IMPLEMENTED — interface only.**
+A data frame is a table held one column at a time: each column has a
+name, one element type, and the same number of rows as its neighbours.
+It is the shape a spreadsheet, a database result and a statistical
+notebook all have. This package brings it to novo-lang. Its references
+are the Rust library [polars](https://docs.pola.rs/) for the shape and
+[pandas](https://pandas.pydata.org/docs/) for the names of the
+operations. Numeric columns convert to and from arrays of
+[ndarray-nv](https://novo-lang.org/packages/ndarray-nv), and
+[csv-nv](https://novo-lang.org/packages/csv-nv) records convert to and
+from frames.
 
-Every public function below is published with its signature and its
-effect row, and every body is `todo()`.  Installing this package works;
-calling it panics with `not implemented`.
+**Status: NOT IMPLEMENTED — interface only.** Every function is declared
+with its full signature, but every body is a `todo()` that panics when
+called. The package is published so its design can be reviewed and
+depended on before it is implemented. Version 0.1.0 will be the first
+working release.
 
-## What this is
+## What a frame, a column and a null are
 
-A data frame for novo-lang: named, typed columns over one shared length,
-each carrying a null mask.  Selection by name and by mask, `head`,
-`tail` and `slice`, `with_column` and `drop`, a stable sort by several
-keys, group-by with count, sum, mean, min and max, an inner and a left
-join on one key, and `describe`.
+A **column** is a name, a list of values all of one type, and a
+**present mask** saying which positions hold a value. A **frame** is a
+list of columns of equal length. A **row** is a position, the same
+position in every column.
 
-It is the middle of the novobook tier.  ndarray-nv is underneath — a
-numeric column converts to an array and back, and `filter` takes an
-array mask — and stats-nv is beside it, taking the same arrays.
+A **null** is a position the mask says is absent. It is not a zero and
+not a not-a-number: a missing measurement and a failed calculation are
+different things, and telling them apart is most of what a frame is for.
 
-The subset is the one measured off notebook corpora rather than the
-whole of polars: what a cell actually calls, load, look, filter, group,
-join, summarise.  What is deliberately absent is in "What is not here".
+There are four element types.
+
+| Kind | Holds |
+| --- | --- |
+| `DfFloatKind` | a 64-bit floating-point number |
+| `DfIntKind` | a 64-bit integer |
+| `DfBoolKind` | a truth |
+| `DfStrKind` | text |
+
+A **cell** is one value at one position, as a `DfCell`. It is either one
+of the four types or `DfNullCell`.
+
+A **mask** is a shaped array of truths from ndarray-nv. Selecting rows
+from a frame means computing a mask over a column and handing it to
+`dftable.filter`.
+
+A **group-by** splits the rows into groups that share the same value in
+one or more key columns, and then computes one number per group. A
+**join** matches the rows of two frames by the value in one column of
+each.
+
+## Install
 
 ```
 novo pkg add dataframe-nv
-novo pkg build
-novo test --isolate
 ```
 
-Every call panics with `not implemented` until the implementation lands,
-so `novo test --isolate` is what a first-time reader runs: each `@test`
-gets its own process and prints the function it stopped at.
-
-## The one example that will work
+## Example
 
 ```novo
-use dftable
+use std.list
 use dfcolumn
+use dftable
 use dfgroup
-use ndfloat
 
 fn main() [io]
-    // Sales per city, and the mean sale in each — the four calls a
-    // notebook cell actually makes.
+    // Three rows, two columns. Every column has a name, a type and the
+    // same length as its neighbours.
     match dftable.of_columns([dfcolumn.strings("city", ["oslo", "bergen", "oslo"]),
                               dfcolumn.floats("sale", [10.0, 20.0, 30.0])])
-        Ok(sales) =>
-            match dfgroup.by(sales, ["city"])
-                Ok(g) =>
-                    match dfgroup.aggregate(g, sales, [DfAggSpec { column: "sale", how: DfMean, into: "mean_sale" }])
-                        Ok(out) => println("${dftable.names(out)} over ${dftable.rows(out)} row(s)")
-                        Err(e)  => println(e.message())
-                Err(e) => println(e.message())
         Err(e) => println(e.message())
+        Ok(sales) =>
+            println("${list.len(dftable.names(sales))} columns over ${dftable.rows(sales)} rows")
+
+            // One group per distinct city, in first-appearance order.
+            match dfgroup.by(sales, ["city"])
+                Err(e) => println(e.message())
+                Ok(g) =>
+                    // The mean sale in each group, as a new frame.
+                    match dfgroup.aggregate(g, sales, [DfAggSpec { column: "sale", how: DfMean, into: "mean_sale" }])
+                        Err(e)  => println(e.message())
+                        Ok(out) => println("${dfgroup.count(g)} groups, ${dftable.rows(out)} rows out")
 ```
 
-## The layer, and why
+Build and test with `novo pkg build` and `novo test`. Today `novo test`
+fails on purpose: every test reaches a
+`not implemented: dataframe-nv.<module>.<fn>` panic. The tests are the
+specification the implementation will have to satisfy.
 
-`core`.  A frame is a list of columns and a column is a list of values.
-Nothing here opens a file, connects to anything or reads a clock.
-LOADING a frame is the host's job and it stays there: the host reads the
-bytes, csv-nv parses them into records, and `dfcsv.of_records` turns
-those into columns — only the first of those three performs anything.
-The whole surface is `[]`, and there are no `host_modules`.
+`novo test --isolate` gives each test its own process, so the output
+names the function each one stopped at.
 
-**No `@tier(embedded)` claim**, and none is intended.  A frame's whole
-purpose is to hold more data than fits in a person's head; a device with
-64 KB of RAM is not where that happens, and the `describe` this package
-exists to make cheap allocates a second frame to say it.  The audit's
-`core-embedded` row passes and says the claim was not made.
+## What the package contains
 
-## The load-bearing interface
+| Module | Contents |
+| --- | --- |
+| `dfcell` | The four element kinds, one cell, and what can be asked of one: its kind, its text, parsing it from text, inferring a kind from a list of texts, and comparing two. |
+| `dfcolumn` | The column: the four constructors, nulls, the accessors, selection by mask and by position, the conversions to and from ndarray-nv arrays, casting, and the six per-column aggregates. |
+| `dftable` | The frame: construction from columns and from rows of text, the shape, column lookup, select and drop, `with_column` and rename, `head`, `tail` and `slice`, filter and take, a sort by several keys, the row and text views, concatenation, and dropping rows with nulls. |
+| `dfgroup` | Group-by: the groups, their keys and sizes, the rows of one group, the five aggregations, and applying several of them at once. |
+| `dfjoin` | The inner and left joins, on one column name or on two different ones, with a suffix rule for colliding names, and the matching positions on their own. |
+| `dfsummary` | One column summarised, `describe` over a whole frame, a quantile, and the null counts per column. |
+| `dfcsv` | Turning csv-nv records into a frame and back, with the element kinds given or inferred. |
+| `dffault` | Every reason an operation refuses, as one enum with ten variants. |
 
-**A column is `DfCells` plus a `present` mask, and NOT an `NdFloat`.**
+## How to choose an entry point
 
-Three things a column has that an array does not: a NAME, a null MASK,
-and an element type that may be Bool or Str.  If a column were an array
-then a text column could not exist and a null could only be a NaN —
-which collapses "missing" and "not a number", and telling those apart is
-most of what a data frame is for.  So a column holds its values in a
-four-way enum of flat lists, and CONVERTS to an array when the caller
-wants array arithmetic, with the nulls decided explicitly at that
-boundary.
+**`dftable.of_columns` is the usual way in** when you already hold typed
+values. `dftable.of_rows` takes a header and rows of text, which serves
+a database cursor, a JSON array of arrays or a fixed-width reader.
+`dfcsv.of_records` takes csv-nv's own header and records.
 
-That conversion is the whole of the ndarray-nv dependency, and it is
-load-bearing rather than structural.  The path a notebook takes:
+**Use `dfcsv` rather than `dftable.of_rows` for a CSV file.** It keeps
+the types csv-nv already knows, and a record of the wrong width is
+reported with the line number it came from. A bare list of texts has
+thrown that number away.
 
+**Arithmetic happens in ndarray-nv, not here.** The path a filter takes
+is four calls.
+
+```novo ignore
+let sale = dfcolumn.to_floats(dftable.column(t, "sale")!)!   // a numeric column becomes an array
+let big  = ndfloat.gt(sale, ndfloat.scalar(15.0))!           // the comparison, column-wise
+let rows = dftable.filter(t, big)!                           // the mask selects the frame's rows
+let col  = dfcolumn.of_floats("sale", sale)!                 // a computed array becomes a column again
 ```
-dfcolumn.to_floats   a numeric column becomes an NdFloat  (refuses a null)
-ndfloat.gt           the comparison, over unboxed doubles, in ndarray-nv
-dftable.filter       the resulting NdMask selects the frame's rows
-dfcolumn.of_floats   a computed array becomes a named column again
+
+`filter` takes a mask rather than a predicate over a row, and `sort`
+takes a list of key columns rather than a comparator, because both are
+then computed over flat buffers one column at a time.
+
+**`dfsummary.describe` answers a frame, not text.** So does
+`dfgroup.aggregate` and so does `dfjoin.join`. Nothing in this package
+prints.
+
+## The rules a user needs
+
+The null rule is the one to read first. It is written once, in
+`dfcolumn`'s module documentation, and it has five parts.
+
+1. **An aggregation skips nulls, and the divisor is what remains.** The
+   mean of a column with two nulls out of five is the sum of the three
+   present values divided by three.
+2. **A null join key matches nothing, not even another null.** This is
+   SQL's rule. polars matches nulls to each other and pandas drops the
+   row.
+3. **A null in a group key is its own group.** So the group sizes add up
+   to the frame's row count. pandas drops those rows.
+4. **Nulls sort last, in both directions.**
+5. **A conversion to a numeric array refuses a column with nulls.**
+   `dfcolumn.to_floats` answers `DfNullInNumeric`, naming the column and
+   the count. `to_floats_or` takes the fill value to use instead. A null
+   is not silently a NaN.
+
+The rest:
+
+6. **A row is a position, not a label.** There is no row index. Two
+   frames are aligned by position or joined by a key column, never by an
+   index nobody set.
+7. **Column names are unique within a frame.** `of_columns` refuses a
+   repeat with `DfDuplicateColumn`.
+8. **Every column in a frame has the same length.** A mismatch is
+   `DfLengthMismatch`, carrying both numbers.
+9. **Groups come back in first-appearance order.** This follows polars.
+10. **`describe` gives the sample standard deviation**, divided by one
+    less than the count, and quantiles by linear interpolation. Those
+    are pandas's choices, so that a reader comparing against a Python
+    notebook sees the same numbers.
+11. **`describe` is defined at every kind.** A text column gets its row
+    count, its present count, its null count, its distinct count and its
+    smallest and largest values. The mean, the standard deviation and
+    the quartiles are absent for it.
+12. **A join between frames with a colliding column name needs a
+    suffix.** `dfjoin.join_with_suffix` takes it.
+13. **Every failure carries the numbers or the name.**
+    `DfNoSuchColumn` names the column, `DfRowOutOfRange` carries the row
+    and the row count, and `DfArrayFault` carries the ndarray-nv failure
+    underneath it unchanged.
+
+## What is not included
+
+- **A row index.** See rule 6.
+- **A lazy query plan and an expression language.** Every call here runs
+  when it is made.
+- **Window functions, pivot and melt.**
+- **A date column and a decimal column.** Dates belong to a calendar
+  package and decimals to their own.
+- **A categorical type.** An integer column with a dictionary beside it
+  is the same thing without a second element kind.
+- **Right and outer joins.** A right join is a left join with the
+  arguments the other way round.
+- **A join on more than one column.** Combine the keys into one column
+  first.
+- **Printing.** See "How to choose an entry point".
+- **A microcontroller build.** A frame exists to hold more data than
+  fits in a person's head, and `describe` allocates a second frame to
+  report on the first. This package makes no device claim and ships no
+  device probe.
+
+## Related packages
+
+- [ndarray-nv](https://novo-lang.org/packages/ndarray-nv) is where the
+  arithmetic happens. A numeric column converts to one of its arrays and
+  back, and its mask type is what `filter` takes.
+- [csv-nv](https://novo-lang.org/packages/csv-nv) reads and writes the
+  records `dfcsv` converts. It carries the line number that a refusal
+  reports.
+- [stats-nv](https://novo-lang.org/packages/stats-nv) takes the same
+  arrays a column converts to, for summaries this package does not
+  carry and for hypothesis tests.
+- [plot-nv](https://novo-lang.org/packages/plot-nv) draws a column
+  directly.
+- [parquet-nv](https://novo-lang.org/packages/parquet-nv) reads the
+  columnar file format a frame of this shape is usually stored in.
+
+## Tests
+
+```bash
+novo test tests/dfcell_tests.nv        #  7 tests: the cell and the kind inference
+novo test tests/dfcolumn_tests.nv      # 13 tests: the column, its nulls and its conversions
+novo test tests/dftable_tests.nv       # 12 tests: the frame and its row operations
+novo test tests/dfgroup_tests.nv       #  7 tests: group-by and the five aggregations
+novo test tests/dfjoin_tests.nv        #  7 tests: the two joins and the null key rule
+novo test tests/dfsummary_tests.nv     #  9 tests: describe and the quantiles
 ```
 
-`filter` takes a mask rather than a row predicate for the same reason
-every columnar frame does: a predicate over a row would be handed one
-tagged allocation per column per row and would run once per row in the
-caller's code, where a mask is computed column-wise over flat buffers.
-Sorting is by key list rather than by comparator for the same reason.
+polars is the reference for the shape and pandas for the summary
+numbers. polars's own test suite is the oracle the implementation will
+be run against, with pandas's `describe` output as the comparison for
+the mean, the sample standard deviation and the quartiles.
 
-**And the null rule, written once.**  It lives in `dfcolumn`'s module
-comment and every doc comment that could restate it points there
-instead.  In short: nulls are SKIPPED in an aggregation and the count of
-what remains is the divisor; a null join key MATCHES NOTHING, not even
-another null; a null predicate DROPS its row; nulls sort LAST in both
-directions; and a numeric conversion REFUSES a null unless the caller
-names a fill.
+The suite asserts each of the five parts of the null rule against the
+case that would break it: an aggregation over a column with nulls, a
+join whose keys are null on both sides, a group whose key is null, a
+sort in both directions, and a numeric conversion of a column with a
+null in it. It also asserts that group sizes sum to the row count, that
+groups appear in first-appearance order, and that `describe` is defined
+for a text column.
 
-Two of those are places this package deliberately differs from its
-references, and both are stated where they bite:
+The tests compile today and fail at run, each on the
+`not implemented: dataframe-nv.<module>.<fn>` panic that is its body.
+That is the expected state of an interface release. They turn green one
+at a time as bodies land.
 
-| | polars | pandas | here |
-| --- | --- | --- | --- |
-| a null join key | matches other nulls | drops the row | matches nothing (SQL's rule) |
-| a null group key | its own group | dropped | its own group, so the group sizes sum to the row count |
-| nulls in a sort | last | last | last, in both directions |
-| a null into numeric | becomes null downstream | becomes NaN | refused, unless a fill is named |
+## Implementation status
 
-## What one dependency each buys
+| Item | Implemented |
+| --- | --- |
+| `dfcell.DfKind`, `.DfCell`, `dfcolumn.DfColumn`, `.DfCells` | declared |
+| `dftable.DfTable`, `.DfSortKey`, `dfgroup.DfGroups`, `.DfAgg`, `.DfAggSpec` | declared |
+| `dfjoin.DfJoinKind`, `dfsummary.DfSummary`, `dffault.DfFault` | declared |
+| `dfcell.kind_of`, `.kind_name`, `.render`, `.parse`, `.infer`, `.compare` | no |
+| `dfcolumn.floats`, `.ints`, `.bools`, `.strings`, `.of_cells`, `.with_nulls` | no |
+| `dfcolumn.name`, `.rename`, `.kind`, `.len`, `.null_count`, `.is_null`, `.cell`, `.cells_of` | no |
+| `dfcolumn.filter`, `.take`, `.cast` | no |
+| `dfcolumn.to_floats`, `.to_floats_or`, `.to_ints`, `.mask`, `.present_mask`, `.of_floats`, `.of_ints` | no |
+| `dfcolumn.count`, `.sum`, `.mean`, `.min`, `.max`, `.unique_count` | no |
+| `dftable.of_columns`, `.empty`, `.of_rows`, `.rows`, `.width`, `.names`, `.column`, `.has` | no |
+| `dftable.select`, `.drop`, `.with_column`, `.rename`, `.head`, `.tail`, `.slice` | no |
+| `dftable.filter`, `.take`, `.sort`, `.sort_positions` | no |
+| `dftable.row_cells`, `.to_rows`, `.concat_rows`, `.drop_nulls` | no |
+| `dfgroup.by`, `.count`, `.keys`, `.sizes`, `.positions`, `.frame_of`, `.agg`, `.aggregate` | no |
+| `dfjoin.join`, `.join_on`, `.join_with_suffix`, `.join_positions` | no |
+| `dfsummary.of_column`, `.describe`, `.quantile`, `.null_counts` | no |
+| `dfcsv.of_records`, `.of_records_inferred`, `.infer_kinds`, `.to_records`, `.header_of` | no |
+| `dffault`'s ten variants and its `Error` implementation | no |
 
-- **ndarray-nv** (path, sibling; `^0.0.1` at publish) — the numeric
-  bridge above.  Without it this package would grow its own flat
-  numeric arithmetic and its own mask type, and stats-nv would then
-  have two array types to take.
-- **csv-nv** (`^0.1.1`, published) — `dfcsv`, five functions.  It is
-  NOT the only way in: `dftable.of_rows` takes `[Str]` and `[[Str]]`
-  and serves a database cursor, a JSON array of arrays or a fixed-width
-  reader.  What the dependency buys is that the CSV path is TYPED — a
-  caller holding csv-nv's own `Header` and `Row` does not unpack them
-  first — and that a record of the wrong width is reported with its
-  LINE NUMBER, which csv-nv carries and a bare `[Str]` has thrown away.
-  That line number is the whole argument for the dependency, and it is
-  the trade the milestone review should weigh: one more package in
-  every consumer's closure, for the CSV path being typed rather than
-  merely possible.
+## Licence
 
-## What is not here
+Apache-2.0. See `LICENSE`.
 
-Named so a reader stops looking: no row index (a row is a POSITION —
-see `dftable`'s module comment for why pandas's index is the thing not
-being copied), no lazy query plan, no expression DSL, no window
-functions, no pivot or melt, no date or decimal column (calendar-nv and
-chrono-nv are their own rows on the grid), no categorical type (an Int
-column and a dictionary beside it), no right or outer join (a right
-join is a left join with the arguments swapped), no multi-column join
-key (make the key a column), and no printing — a library returns text
-or a frame, and `describe` returning a FRAME is what lets a caller print
-it however they like.
-
-## The reference implementation
-
-**polars** (MIT) for the shape — columnar, no row index, group-by
-producing a frame, first-appearance group order — and **pandas**
-(BSD-3-Clause) for the operations a notebook reader expects to find by
-name: `head`, `describe`, `groupby(...).agg(...)`, a left join.  Where
-the two disagree, the table above says which was taken and why.
-
-polars's own test suite is the oracle the implementation lane will run
-the ported subset against, with pandas's `describe` output as the
-comparison for the summary numbers — mean, sample standard deviation
-and linear-interpolated quantiles, which are what a reader checking
-against a Python notebook will compare.
-
-## Status
-
-Every function is `todo()`.  `novo test --isolate` is the readable form
-of that verdict.
-
-| module | public functions | implemented |
-| --- | --- | --- |
-| `dffault` | the `DfFault` enum and its `Error` impl | no |
-| `dfcell` | 6 | no |
-| `dfcolumn` | 29 | no |
-| `dftable` | 23 | no |
-| `dfgroup` | 8 | no |
-| `dfjoin` | 4 | no |
-| `dfsummary` | 4 | no |
-| `dfcsv` | 5 | no |
+<!-- docs/writing-a-readme.md is the style guide for this page. -->

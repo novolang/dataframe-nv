@@ -1,6 +1,6 @@
 [package]
 name        = "dataframe-nv"
-version     = "0.0.1"
+version     = "0.0.2"
 description = "Named, typed columns over a shared length, and the operations a notebook performs on them: selection by name and by mask, head, tail and slice, with_column and drop, sort by several keys, group-by with count, sum, mean, min and max, an inner and a left join on one key, and describe.  Every column carries a null mask, and what a null does is written down once."
 
 license     = "Apache-2.0"
