@@ -5,6 +5,18 @@ All notable changes to dataframe-nv are recorded here. The format is
 package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 with the pre-1.0 rule that a breaking change bumps the MINOR number.
 
+## 0.0.3 — 2026-09-25
+
+The package builds with novo 0.10.0.  Every body is still `todo()`.
+
+- The csv-nv requirement is now `^0.1.4`.  csv-nv 0.1.1 to 0.1.3 do not
+  build with novo 0.10.0, and a program that depends on this package
+  would fail inside csv-nv.
+- One summary test read the first record with a `match` on `list.get`.
+  `list.get` answers the element itself, not an option, so the test now
+  checks the length and reads the element by index.  It asserts the
+  same things.
+
 ## 0.0.2 — 2026-09-15
 
 README rewritten to the package README style guide (docs/writing-a-readme.md); no change to the interface.

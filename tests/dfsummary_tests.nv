@@ -238,14 +238,12 @@ fn test_to_records_and_header_of_go_back_out() [io]
     match dftable.of_columns([dfcolumn.ints("n", [1, 2])])
         Ok(t)  =>
             let rs = dfcsv.to_records(t)
-            match list.get(rs, 0)
-                // The binder is re-bound through an annotation: a
-                // `Some` from `list.get` over a list of structs does
-                // not carry its struct type into a field read, and the
-                // annotation is what supplies it.
-                Some(first) =>
-                    let r: Row = first
-                    test.assert(r.line == 2)
-                    test.assert(r.index == 0)
-                None        => test.fail("the first record was missing")
+            // `list.get` answers the element itself, not an option, so
+            // the length is checked first and the element read by index.
+            if list.len(rs) == 0
+                test.fail("the first record was missing")
+            else
+                let r: Row = rs[0]
+                test.assert(r.line == 2)
+                test.assert(r.index == 0)
         Err(e) => test.fail("of_columns failed: ${e.message()}")
