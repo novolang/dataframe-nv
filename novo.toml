@@ -1,6 +1,6 @@
 [package]
 name        = "dataframe-nv"
-version     = "0.0.3"
+version     = "0.0.4"
 description = "Named, typed columns over a shared length, and the operations a notebook performs on them: selection by name and by mask, head, tail and slice, with_column and drop, sort by several keys, group-by with count, sum, mean, min and max, an inner and a left join on one key, and describe.  Every column carries a null mask, and what a null does is written down once."
 
 license     = "Apache-2.0"
@@ -49,6 +49,6 @@ ndarray-nv = "^0.0.1"
 # back.  The generic entry point beside it — `dftable.of_rows`, which
 # takes `[[Str]]` — serves a database rowset or a JSON array just as
 # well, so this dependency buys the CSV path being NAMED and TYPED
-# rather than the only path existing.  The range starts at 0.1.4
-# because earlier csv-nv releases do not build with novo 0.10.0.
-csv-nv = "^0.1.4"
+# rather than the only path existing.  The range starts at 0.2.0
+# because earlier csv-nv releases do not build with novo 0.11.
+csv-nv = "^0.2.0"

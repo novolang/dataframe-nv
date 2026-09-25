@@ -3,9 +3,9 @@
 [csv-nv]
 source = "registry"
 url = "https://registry.novo-lang.org"
-req = "^0.1.4"
-version = "0.1.4"
-hash = "c07c322ef1923748b14e94a58c62df3e8fe5d94de1e36bc365cefa323adb94d9"
+req = "^0.2.0"
+version = "0.2.0"
+hash = "f68b37ade5526f18f44b0d8c29757d5516f8c9de90e143b269100f369088b092"
 
 [ndarray-nv]
 source = "registry"

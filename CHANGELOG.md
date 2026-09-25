@@ -5,6 +5,17 @@ All notable changes to dataframe-nv are recorded here. The format is
 package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 with the pre-1.0 rule that a breaking change bumps the MINOR number.
 
+## 0.0.4 — 2026-09-25
+
+The package builds with novo 0.11.  Every body is still `todo()`.
+
+- The csv-nv requirement is now `^0.2.0`, and the lock names csv-nv
+  0.2.0.  csv-nv 0.1.4 writes into lists through names that are not
+  declared `var`, which novo 0.11 refuses (E2038), and 0.2.0, the first
+  release with the repair, is outside `^0.1.4`.  The one change in
+  csv-nv 0.2.0 that breaks a caller, `record.names` answering a copy,
+  touches nothing in this package.
+
 ## 0.0.3 — 2026-09-25
 
 The package builds with novo 0.10.0.  Every body is still `todo()`.
