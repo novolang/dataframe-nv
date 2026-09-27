@@ -15,7 +15,6 @@
 
 use dfcell
 use dftable
-use record
 
 // A frame from csv-nv's header and records, with the kinds named.
 //

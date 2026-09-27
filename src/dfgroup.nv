@@ -19,7 +19,6 @@
 // rows by default.  In a join key, by contrast, a null matches nothing;
 // `dfcolumn`'s module comment states both rules.
 
-use std.collections
 use dfcell
 use dfcolumn
 use dftable

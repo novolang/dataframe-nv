@@ -17,7 +17,6 @@
 //
 // What a null does is stated once, in `dfcolumn`'s module comment.
 
-use std.collections
 use dfcell
 use dfcolumn
 use ndbool
@@ -481,34 +480,24 @@ pub fn sort(t: DfTable, keys: [DfSortKey]) -> Result<DfTable, DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn sort_positions(t: DfTable, keys: [DfSortKey]) -> Result<[Int], DfFault>
-    var keyed: [[DfCell]] = []
+    var ranked: [[Int]] = []
     for k in keys
-        list.push(keyed, dfcolumn.cells_of(column(t, k.column)!))
-    var order: [Int] = []
-    for i in 0..t.rows
-        list.push(order, i)
-    var spare: [Int] = []
-    for i in 0..t.rows
-        list.push(spare, i)
-    // A bottom-up merge sort, which is stable: of two rows that agree on
-    // every key, the one from the left run is taken first.
-    var width = 1
-    while width < t.rows
-        var lo = 0
-        while lo < t.rows
-            let mid = if lo + width < t.rows
-                lo + width
-            else
-                t.rows
-            let hi = if lo + 2 * width < t.rows
-                lo + 2 * width
-            else
-                t.rows
-            merge(order, spare, lo, mid, hi, keyed, keys)
-            lo = hi
+        list.push(ranked, ranks(column(t, k.column)!, k.descending))
+    // One stable sort per key, from the last key to the first.  Each
+    // sort orders by the key's rank and breaks a tie by the position the
+    // previous sorts left the row at, so the first key ends outermost.
+    var order = list.range(0, t.rows)
+    for n in list.range(0, list.len(keys))
+        let rank = ranked[list.len(keys) - 1 - n]
+        var pairs: [(Int, Int)] = []
         for i in 0..t.rows
-            order[i] = spare[i]
-        width = width * 2
+            list.push(pairs, (rank[order[i]], i))
+        list.sort(pairs)
+        var next: [Int] = []
+        for pair in pairs
+            let (_, at) = pair
+            list.push(next, order[at])
+        order = next
     Ok(order)
 
 // One row, as cells in column order.
@@ -643,32 +632,67 @@ fn slice_column(c: DfColumn, start: Int, stop: Int) -> DfColumn
         DfStrCells(vs)   => DfStrCells(vs[start:stop])
     DfColumn { name: c.name, cells: cells, present: c.present[start:stop] }
 
-// Merge the sorted runs `order[lo..mid]` and `order[mid..hi]` into
-// `into[lo..hi]`.
-fn merge(order: [Int], var into: [Int], lo: Int, mid: Int, hi: Int, keyed: [[DfCell]],
-         keys: [DfSortKey])
-    var i = lo
-    var j = mid
-    var k = lo
-    while k < hi
-        let take_left = j >= hi or i < mid and row_order(order[i], order[j], keyed, keys) != Greater
-        if take_left
-            into[k] = order[i]
-            i += 1
-        else
-            into[k] = order[j]
-            j += 1
-        k += 1
+// Each row's rank under one sort key: equal values share a rank, a
+// smaller rank sorts first, and every null ranks after every value in
+// both directions.
+fn ranks(c: DfColumn, descending: Bool) -> [Int]
+    let n = dfcolumn.len(c)
+    var out: [Int] = []
+    for _ in 0..n
+        list.push(out, n)
+    let cells = dfcolumn.cells_of(c)
+    var distinct = 0
+    let order = value_order(c)
+    for i in 0..list.len(order)
+        let row = order[i]
+        if i > 0 and dfcell.compare(cells[order[i - 1]], cells[row]) != Some(Equal)
+            distinct += 1
+        out[row] = distinct
+    if descending
+        for row in order
+            out[row] = distinct - out[row]
+    out
 
-// How row `a` orders against row `b` under the keys.  A null goes last
-// whichever the direction, so only the order between two values turns
-// round for a descending key.
-fn row_order(a: Int, b: Int, keyed: [[DfCell]], keys: [DfSortKey]) -> Ordering
-    for n in 0..list.len(keys)
-        let x = keyed[n][a]
-        let y = keyed[n][b]
-        let o = dfcell.compare(x, y) ?? Equal
-        if o != Equal
-            let flip = keys[n].descending and x != DfNullCell and y != DfNullCell
-            return if flip then (if o == Less then Greater else Less) else o
-    Equal
+// The present rows of a column, smallest value first, by the list sort
+// of `(value, row)` pairs.  Floats follow the total order of SPEC
+// section 13.6, which is `dfcell.compare`'s; a truth sorts as 0 or 1.
+fn value_order(c: DfColumn) -> [Int]
+    var rows: [Int] = []
+    match c.cells
+        DfFloatCells(vs) =>
+            var pairs: [(Float, Int)] = []
+            for i in 0..list.len(vs)
+                if c.present[i]
+                    list.push(pairs, (vs[i], i))
+            list.sort(pairs)
+            for pair in pairs
+                let (_, row) = pair
+                list.push(rows, row)
+        DfIntCells(vs)   =>
+            var pairs: [(Int, Int)] = []
+            for i in 0..list.len(vs)
+                if c.present[i]
+                    list.push(pairs, (vs[i], i))
+            list.sort(pairs)
+            for pair in pairs
+                let (_, row) = pair
+                list.push(rows, row)
+        DfBoolCells(vs)  =>
+            var pairs: [(Int, Int)] = []
+            for i in 0..list.len(vs)
+                if c.present[i]
+                    list.push(pairs, ((if vs[i] then 1 else 0), i))
+            list.sort(pairs)
+            for pair in pairs
+                let (_, row) = pair
+                list.push(rows, row)
+        DfStrCells(vs)   =>
+            var pairs: [(Str, Int)] = []
+            for i in 0..list.len(vs)
+                if c.present[i]
+                    list.push(pairs, (vs[i], i))
+            list.sort(pairs)
+            for pair in pairs
+                let (_, row) = pair
+                list.push(rows, row)
+    rows

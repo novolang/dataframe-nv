@@ -17,7 +17,6 @@
 // several right rows appears once per match, so a result can be longer
 // than both inputs.
 
-use std.collections
 use dfcell
 use dfcolumn
 use dftable

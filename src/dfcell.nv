@@ -13,7 +13,6 @@
 // row's answer is handed back.
 
 use std.str
-use std.math
 
 // Which of the four types a column holds.
 //

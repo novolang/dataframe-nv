@@ -217,7 +217,7 @@ novo test tests/dfgroup_tests.nv         #  7 tests: group-by and the five aggre
 novo test tests/dfjoin_tests.nv          #  7 tests: the two joins and the null key rule
 novo test tests/dfsummary_tests.nv       #  9 tests: describe, the quantiles and the CSV bridge
 novo test tests/differential_tests.nv    # 18 tests: against SQLite and Python's statistics
-novo test tests/edges_tests.nv           # 11 tests: the refusals, the rarer kinds, a CSV round trip
+novo test tests/edges_tests.nv           # 12 tests: the refusals, the rarer kinds, a CSV round trip
 bash tests/coverage.sh                   # line coverage over src/, merged across the suites
 ```
 

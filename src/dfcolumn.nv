@@ -37,7 +37,6 @@
 // three siblings, rather than a list of `DfCell`.  A list of doubles is
 // one allocation; a list of tagged cells is one per value.
 
-use std.collections
 use std.float
 use std.int
 use dfcell
