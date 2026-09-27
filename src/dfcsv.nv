@@ -1,46 +1,28 @@
-// dfcsv.nv — the bridge between csv-nv's records and a frame.
+// dfcsv.nv — csv-nv's records turned into a frame and back.
 //
-// WHY THIS MODULE IS SMALL AND WHY IT EXISTS AT ALL.  A CSV file is the
-// first thing a notebook loads, and reading one is two steps that
-// belong to two packages: csv-nv turns bytes into a `Header` and a list
-// of `Row`s, and this turns those into columns.  Neither step reads a
-// file — csv-nv is `core` too, and the host is what opens it — so the
-// whole path from a path on disk to a frame is:
+// Loading a CSV file takes three steps.  The host reads the bytes;
+// csv-nv parses them into a `Header` and a list of `Row`s; this module
+// turns those into a `DfTable`.  Only the first step performs input.
 //
-//     the host reads the bytes
-//     csv-nv parses them into a Header and Rows
-//     dfcsv.of_records turns those into a DfTable
+// `dftable.of_rows` takes rows of text from any source.  This module
+// takes csv-nv's own values, and a record of the wrong width is refused
+// with the line it started on, which a bare `[Str]` no longer carries.
 //
-// and only the first line performs anything.
-//
-// WHY THE CSV PATH IS NAMED WHEN A GENERIC ONE EXISTS.
-// `dftable.of_rows` takes `[Str]` and `[[Str]]` and serves a database
-// cursor, a JSON array of arrays and a fixed-width reader as well as a
-// CSV.  So this module is not the only way in, and it is not load-
-// bearing.  What it buys is that the CSV path is TYPED: a caller
-// holding csv-nv's own values does not have to unpack them into
-// lists first, and a `Row` that is the wrong width is caught here with
-// its LINE NUMBER — which csv-nv carries and a bare `[Str]` has thrown
-// away.  That line number in the error is the whole argument for the
-// dependency.
-//
-// THE EMPTY FIELD IS A NULL, except in a Str column where it is the
-// empty string.  `dfcell.parse` is where that rule lives and this
-// module does not restate it.  It is the one CSV convention that
-// cannot be got right for everybody: a file that means "empty string"
-// in a numeric column has no way to say so, and a file that means
-// "missing" in a text column has no way either.  Callers who need the
-// other reading load the column as Str and `dfcolumn.cast` it
-// themselves.
+// An empty field is a null, except in a Str column, where it is the
+// empty string.  `dfcell.parse` is where that rule is applied.  A caller
+// who needs the other reading loads the column as Str and casts it with
+// `dfcolumn.cast`.
+
+use dfcell
+use dftable
+use record
 
 // A frame from csv-nv's header and records, with the kinds named.
 //
-// `DfLengthMismatch` for a record that is not as wide as the header —
-// and because a `Row` carries the line it started on, the reader is
-// sent to the line rather than to the record number.  `DfBadRange`
-// when `kinds` is not as long as the header, and
-// `DfDuplicateColumn` when the header repeats a name, which real files
-// do and which a frame cannot represent.
+// `DfRaggedRecord` for a record that is not as wide as the header,
+// with the line the record started on.  `DfBadRange` when `kinds` is
+// not as long as the header, and `DfDuplicateColumn` when the header
+// repeats a name.
 //
 // ```novo
 // use dfcsv
@@ -53,16 +35,18 @@
 //         Err(e) => println(e.message())
 // ```
 pub fn of_records(header: Header, records: [Row], kinds: [DfKind]) -> Result<DfTable, DfFault>
-    todo("dataframe-nv.dfcsv.of_records")
+    let width = list.len(header.names)
+    if list.len(kinds) != width
+        return Err(DfBadRange("${list.len(kinds)} kind(s) for ${width} column(s)"))
+    dftable.of_rows(header.names, fields_of(header, records)!, kinds)
 
 // A frame from csv-nv's header and records, with the kinds inferred.
 //
 // One pass per column through `dfcell.infer`: Int, then Float, then
-// Bool, then Str, narrowest that fits every field.  Convenient and
-// therefore dangerous in exactly one way, which is worth knowing
-// before using it — a column of identifiers that happen to be all
-// digits infers as Int, and a leading zero is gone.  A loader that
-// cares names its kinds with `of_records` instead.
+// Bool, then Str, the narrowest that fits every field.  A column of
+// identifiers that are all digits infers as Int, and a leading zero is
+// then lost.  A loader that must keep one names its kinds with
+// `of_records`.
 //
 // ```novo
 // use dfcsv
@@ -75,14 +59,15 @@ pub fn of_records(header: Header, records: [Row], kinds: [DfKind]) -> Result<DfT
 //         Err(e) => println(e.message())
 // ```
 pub fn of_records_inferred(header: Header, records: [Row]) -> Result<DfTable, DfFault>
-    todo("dataframe-nv.dfcsv.of_records_inferred")
+    of_records(header, records, infer_kinds(header, records)!)
 
 // The kind each column of these records would be read at.
 //
-// What `of_records_inferred` runs before it builds anything, exposed so
-// a caller can INSPECT the inference, override one entry, and pass the
-// list to `of_records`.  That is the shape a careful loader wants: see
-// what was guessed, correct the identifier column, then load.
+// What `of_records_inferred` runs before it builds anything.  A caller
+// can read the guess, change one entry, and pass the list to
+// `of_records`.  `DfRaggedRecord` for a record that is not as wide as
+// the header.
+
 //
 // ```novo
 // use dfcsv
@@ -95,7 +80,14 @@ pub fn of_records_inferred(header: Header, records: [Row]) -> Result<DfTable, Df
 //         Err(e) => println(e.message())
 // ```
 pub fn infer_kinds(header: Header, records: [Row]) -> Result<[DfKind], DfFault>
-    todo("dataframe-nv.dfcsv.infer_kinds")
+    let rows = fields_of(header, records)!
+    var kinds: [DfKind] = []
+    for j in 0..list.len(header.names)
+        var texts: [Str] = []
+        for r in rows
+            list.push(texts, r[j])
+        list.push(kinds, dfcell.infer(texts))
+    Ok(kinds)
 
 // This frame's rows as csv-nv records, ready for its writer.
 //
@@ -117,7 +109,12 @@ pub fn infer_kinds(header: Header, records: [Row]) -> Result<[DfKind], DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn to_records(t: DfTable) -> [Row]
-    todo("dataframe-nv.dfcsv.to_records")
+    var out: [Row] = []
+    var i = 0
+    for fields in dftable.to_rows(t)
+        list.push(out, Row { fields: fields, line: i + 2, index: i })
+        i += 1
+    out
 
 // This frame's column names as a csv-nv header.
 //
@@ -130,4 +127,15 @@ pub fn to_records(t: DfTable) -> [Row]
 //         Err(e) => println(e.message())
 // ```
 pub fn header_of(t: DfTable) -> Header
-    todo("dataframe-nv.dfcsv.header_of")
+    Header { names: dftable.names(t) }
+
+// The records' fields, refusing a record that is not as wide as the
+// header with the line it started on.
+fn fields_of(header: Header, records: [Row]) -> Result<[[Str]], DfFault>
+    let width = list.len(header.names)
+    var rows: [[Str]] = []
+    for r in records
+        if list.len(r.fields) != width
+            return Err(DfRaggedRecord(r.line, width, list.len(r.fields)))
+        list.push(rows, r.fields[:])
+    Ok(rows)

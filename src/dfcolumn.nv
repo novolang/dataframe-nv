@@ -1,82 +1,50 @@
-// dfcolumn.nv — one named, typed column, its null mask, and THE NULL
-// RULE the whole package points at.
+// dfcolumn.nv — one named, typed column, its null mask, and the rule
+// for what a null does.
 //
-// ══════════════════════════════════════════════════════════════════
-//  WHAT A NULL DOES.  Written once, here, because a data frame that
-//  answers this question differently in three places is a data frame
-//  nobody can predict.  Every doc comment in this package that could
-//  restate a piece of it points at this block instead.
-// ══════════════════════════════════════════════════════════════════
+// A null is a missing value.  Position `i` of a column is null exactly
+// when `present[i]` is false.  A null is never stored as a
+// not-a-number, a zero or an empty string, because a source can hold
+// those as values.  The rule below is the one every operation in the
+// package follows, and the other modules refer to it.
 //
-//  A null is a MISSING value, not a special one.  It is stored in the
-//  column's `present` list — position `i` is null exactly when
-//  `present[i]` is false — and never as a NaN, a zero or an empty
-//  string, because those are values a source can legitimately contain
-//  and collapsing them loses the difference.
+// - In an aggregation, a null is skipped, and the aggregation divides by
+//   the count of what remains.  `count` is the number of present values.
+//   `sum` is the total of the present values, and zero for a column with
+//   none.  `mean` is that total over the present count, and
+//   `DfEmptyGroup` for a column with none.  `min` and `max` are the
+//   smallest and largest present values, and `DfEmptyGroup` for a column
+//   with none.
+// - In a join key, a null matches nothing, not even a null on the other
+//   side.  This is SQL's rule.  polars matches two nulls and pandas drops
+//   the row.  A left join keeps a left row with a null key and fills its
+//   right columns with nulls.
+// - In a group-by key, a null is a group of its own, so the group sizes
+//   sum to the row count.
+// - In a filter, a row whose predicate is null is dropped.  A mask has no
+//   nulls, so the rule is applied where a mask is made: `mask` reads a
+//   null in a Bool column as false.
+// - In a sort, nulls go last in both directions.
+// - In a conversion to a numeric array, a null stops the call with
+//   `DfNullInNumeric`.  `to_floats_or` takes the value to put in its
+//   place.
 //
-//  IN AN AGGREGATION, nulls are SKIPPED and the count of what remains
-//  is what the aggregation divides by.
+// A column is not an `NdFloat`.  It has a name, a null mask, and an
+// element type that may be Bool or Str, which an array does not.  A
+// numeric column converts to an array for arithmetic, with the nulls
+// decided at that point by the caller.
 //
-//    count   how many PRESENT values there are.  `dfgroup.sizes` is
-//            the other number — how many rows — and both are here
-//            because the difference is usually the question.
-//    sum     the total of the present values.  An all-null column
-//            sums to 0 (or 0.0): the empty sum, the same answer
-//            ndarray-nv gives, and it needs no error.
-//    mean    the total of the present values over how many there
-//            were.  An all-null column has no mean: `DfEmptyGroup`.
-//    min     the smallest present value; `DfEmptyGroup` if there is
-//    max     none.  A null is never the smallest or the largest.
-//
-//  IN A JOIN KEY, a null MATCHES NOTHING — not a null on the other
-//  side, and not any value.  That is SQL's rule and the one that
-//  keeps a join from inventing rows: two customers whose region is
-//  unknown are not thereby in the same region.  polars matches nulls
-//  to each other by default and pandas drops them; this package makes
-//  the third choice, states it, and `dfjoin.join` names it again.
-//  A left join keeps the left row and fills every right column with a
-//  null, which is the same rule seen from the other side.
-//
-//  IN A FILTER, a row whose predicate is null is DROPPED.  `filter`
-//  takes an `NdMask` and a mask has no null, so this rule bites where
-//  the mask was built: `dfcolumn.mask` on a Bool column with nulls in
-//  it turns each null into `false`.  "Unknown" is not "keep".
-//
-//  IN A SORT, nulls go LAST — in both directions.  Ascending puts
-//  them after the largest value, descending puts them after the
-//  smallest.  So "sort and look at the top" never shows a screen of
-//  missing data, in either direction, which is the behaviour a person
-//  reading a notebook expects and neither of the two obvious
-//  alternatives gives.
-//
-//  IN A NUMERIC CONVERSION, a null STOPS the call.  `to_floats` on a
-//  column with nulls is `DfNullInNumeric`, naming the column and how
-//  many.  There is a fill — `to_floats_or` — and the caller has to
-//  name the value.  This is the one place the package is deliberately
-//  inconvenient: turning a missing measurement into a number silently
-//  is how a wrong mean gets into a report.
-//
-// ══════════════════════════════════════════════════════════════════
-//
-// WHY A COLUMN IS NOT AN `NdFloat`.  Three things a column has that an
-// array does not: a NAME, a null MASK, and an element type that may be
-// Bool or Str.  If a column were an array then a text column could not
-// exist and a null could only be a NaN — which collapses "missing" and
-// "not a number", and telling those apart is most of what a frame is
-// for.  So a column HOLDS its values in `DfCells` and CONVERTS to an
-// array when the caller wants array arithmetic, with the nulls decided
-// explicitly at that boundary.  That conversion — `to_floats`,
-// `to_ints`, `mask`, and `of_floats` back — is the whole of this
-// package's dependency on ndarray-nv, and it is load-bearing rather
-// than structural.
-//
-// WHY THE PAYLOAD IS AN ENUM OF FOUR LISTS AND NOT A LIST OF ENUMS.
-// `DfFloatCells([Float])` is one list of unboxed doubles; `[DfCell]`
-// would be one tagged allocation per value, on data whose whole point
-// is that there are millions of them.  The cost is that every
-// operation matches on the payload once at the top — which reads as a
-// table of four cases, and is the shape a columnar frame has in every
-// language that has one.
+// The values are one list of one type, `DfFloatCells([Float])` and its
+// three siblings, rather than a list of `DfCell`.  A list of doubles is
+// one allocation; a list of tagged cells is one per value.
+
+use std.collections
+use std.float
+use std.int
+use dfcell
+use ndfloat
+use ndint
+use ndbool
+use ndshape
 
 // One named column: its values, and which of them are there.
 //
@@ -93,9 +61,9 @@ pub struct DfColumn
     // loose column from sharing a name with another loose one.
     name: Str
     // The values, one list of one type.  Its length is the column's
-    // length, INCLUDING the positions that are null: a null still
-    // occupies a slot, holding whatever the type's zero is, and
-    // `present` is what says not to read it.
+    // length, including the positions that are null: a null still
+    // occupies a slot, holding the type's zero, and `present` says not
+    // to read it.
     cells: DfCells
     // Which positions hold a value.  Always the same length as
     // `cells`.  A column with no nulls carries an all-true list rather
@@ -130,7 +98,9 @@ pub enum DfCells
 //     println("${dfcolumn.len(dfcolumn.floats("w", [1.0, 2.0]))}")
 // ```
 pub fn floats(name: Str, values: [Float]) -> DfColumn
-    todo("dataframe-nv.dfcolumn.floats")
+    DfColumn { name: name,
+        cells: DfFloatCells(list.clone(values)),
+        present: all_present(list.len(values)) }
 
 // An Int column with no nulls.
 //
@@ -141,7 +111,9 @@ pub fn floats(name: Str, values: [Float]) -> DfColumn
 //     println("${dfcolumn.len(dfcolumn.ints("n", [1, 2, 3]))}")
 // ```
 pub fn ints(name: Str, values: [Int]) -> DfColumn
-    todo("dataframe-nv.dfcolumn.ints")
+    DfColumn { name: name,
+        cells: DfIntCells(list.clone(values)),
+        present: all_present(list.len(values)) }
 
 // A Bool column with no nulls.
 //
@@ -152,7 +124,9 @@ pub fn ints(name: Str, values: [Int]) -> DfColumn
 //     println("${dfcolumn.len(dfcolumn.bools("ok", [true, false]))}")
 // ```
 pub fn bools(name: Str, values: [Bool]) -> DfColumn
-    todo("dataframe-nv.dfcolumn.bools")
+    DfColumn { name: name,
+        cells: DfBoolCells(list.clone(values)),
+        present: all_present(list.len(values)) }
 
 // A Str column with no nulls.
 //
@@ -163,7 +137,9 @@ pub fn bools(name: Str, values: [Bool]) -> DfColumn
 //     println("${dfcolumn.len(dfcolumn.strings("city", ["oslo"]))}")
 // ```
 pub fn strings(name: Str, values: [Str]) -> DfColumn
-    todo("dataframe-nv.dfcolumn.strings")
+    DfColumn { name: name,
+        cells: DfStrCells(list.clone(values)),
+        present: all_present(list.len(values)) }
 
 // A column of these cells, with a null wherever a cell is
 // `DfNullCell`.
@@ -183,13 +159,27 @@ pub fn strings(name: Str, values: [Str]) -> DfColumn
 //         Err(e) => println(e.message())
 // ```
 pub fn of_cells(name: Str, cells: [DfCell], k: DfKind) -> Result<DfColumn, DfFault>
-    todo("dataframe-nv.dfcolumn.of_cells")
+    var present: [Bool] = []
+    for cell in cells
+        match dfcell.kind_of(cell)
+            None    => list.push(present, false)
+            Some(g) =>
+                if g != k
+                    return Err(DfKindMismatch(k, g))
+                list.push(present, true)
+    let values = match k
+        DfFloatKind => DfFloatCells(list.map(cells, float_of))
+        DfIntKind   => DfIntCells(list.map(cells, int_of))
+        DfBoolKind  => DfBoolCells(list.map(cells, bool_of))
+        DfStrKind   => DfStrCells(list.map(cells, str_of))
+    Ok(DfColumn { name: name, cells: values, present: present })
 
 // The same column with a null mask applied.
 //
 // `present[i] = false` makes position `i` missing; the value already
-// there is left alone and simply stops being read.  `DfLengthMismatch`
-// when the mask is not the column's length.
+// there is left alone and stops being read.  A position that is already
+// null stays null whatever the mask says.  `DfLengthMismatch` when the
+// mask is not the column's length.
 //
 // ```novo
 // use dfcolumn
@@ -200,7 +190,13 @@ pub fn of_cells(name: Str, cells: [DfCell], k: DfKind) -> Result<DfColumn, DfFau
 //         Err(e) => println(e.message())
 // ```
 pub fn with_nulls(c: DfColumn, present: [Bool]) -> Result<DfColumn, DfFault>
-    todo("dataframe-nv.dfcolumn.with_nulls")
+    let n = list.len(c.present)
+    if list.len(present) != n
+        return Err(DfLengthMismatch(n, list.len(present)))
+    var both: [Bool] = []
+    for i in 0..n
+        list.push(both, c.present[i] and present[i])
+    Ok(DfColumn { name: c.name, cells: c.cells, present: both })
 
 // This column's name.
 //
@@ -211,7 +207,7 @@ pub fn with_nulls(c: DfColumn, present: [Bool]) -> Result<DfColumn, DfFault>
 //     println(dfcolumn.name(dfcolumn.ints("n", [1])))
 // ```
 pub fn name(c: DfColumn) -> Str
-    todo("dataframe-nv.dfcolumn.name")
+    c.name
 
 // The same column under a different name.
 //
@@ -222,7 +218,7 @@ pub fn name(c: DfColumn) -> Str
 //     println(dfcolumn.name(dfcolumn.rename(dfcolumn.ints("n", [1]), "count")))
 // ```
 pub fn rename(c: DfColumn, name: Str) -> DfColumn
-    todo("dataframe-nv.dfcolumn.rename")
+    DfColumn { name: name, cells: c.cells, present: c.present }
 
 // Which of the four types this column holds.
 //
@@ -233,7 +229,11 @@ pub fn rename(c: DfColumn, name: Str) -> DfColumn
 //     println(dfcell.kind_name(dfcolumn.kind(dfcolumn.ints("n", [1]))))
 // ```
 pub fn kind(c: DfColumn) -> DfKind
-    todo("dataframe-nv.dfcolumn.kind")
+    match c.cells
+        DfFloatCells(_) => DfFloatKind
+        DfIntCells(_)   => DfIntKind
+        DfBoolCells(_)  => DfBoolKind
+        DfStrCells(_)   => DfStrKind
 
 // How many rows this column has, nulls included.
 //
@@ -244,7 +244,7 @@ pub fn kind(c: DfColumn) -> DfKind
 //     println("${dfcolumn.len(dfcolumn.ints("n", [1, 2, 3]))}")
 // ```
 pub fn len(c: DfColumn) -> Int
-    todo("dataframe-nv.dfcolumn.len")
+    list.len(c.present)
 
 // How many of this column's rows are missing.
 //
@@ -255,7 +255,11 @@ pub fn len(c: DfColumn) -> Int
 //     println("${dfcolumn.null_count(dfcolumn.ints("n", [1, 2]))}")
 // ```
 pub fn null_count(c: DfColumn) -> Int
-    todo("dataframe-nv.dfcolumn.null_count")
+    var n = 0
+    for p in c.present
+        if not p
+            n += 1
+    n
 
 // Whether one row of this column is missing.
 //
@@ -268,7 +272,8 @@ pub fn null_count(c: DfColumn) -> Int
 //         Err(e) => println(e.message())
 // ```
 pub fn is_null(c: DfColumn, row: Int) -> Result<Bool, DfFault>
-    todo("dataframe-nv.dfcolumn.is_null")
+    check_row(c, row)!
+    Ok(not c.present[row])
 
 // One row of this column, as a cell.
 //
@@ -284,7 +289,8 @@ pub fn is_null(c: DfColumn, row: Int) -> Result<Bool, DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn cell(c: DfColumn, row: Int) -> Result<DfCell, DfFault>
-    todo("dataframe-nv.dfcolumn.cell")
+    check_row(c, row)!
+    Ok(cell_at(c, row))
 
 // Every row of this column, as cells.
 //
@@ -299,7 +305,10 @@ pub fn cell(c: DfColumn, row: Int) -> Result<DfCell, DfFault>
 //     println("${list.len(dfcolumn.cells_of(dfcolumn.ints("n", [1, 2])))}")
 // ```
 pub fn cells_of(c: DfColumn) -> [DfCell]
-    todo("dataframe-nv.dfcolumn.cells_of")
+    var out: [DfCell] = []
+    for i in 0..list.len(c.present)
+        list.push(out, cell_at(c, i))
+    out
 
 // The rows a mask keeps, in order.
 //
@@ -319,7 +328,16 @@ pub fn cells_of(c: DfColumn) -> [DfCell]
 //         Err(e) => println(e.message())
 // ```
 pub fn filter(c: DfColumn, keep: NdMask) -> Result<DfColumn, DfFault>
-    todo("dataframe-nv.dfcolumn.filter")
+    let n = list.len(c.present)
+    let got = ndbool.size(keep)
+    if got != n or ndshape.rank(ndbool.shape(keep)) != 1
+        return Err(DfBadMask(n, got))
+    let marks = ndbool.to_list(keep)
+    var positions: [Int] = []
+    for i in 0..n
+        if marks[i]
+            list.push(positions, i)
+    Ok(gather(c, positions))
 
 // The rows at these positions, in the order given.
 //
@@ -338,7 +356,11 @@ pub fn filter(c: DfColumn, keep: NdMask) -> Result<DfColumn, DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn take(c: DfColumn, positions: [Int]) -> Result<DfColumn, DfFault>
-    todo("dataframe-nv.dfcolumn.take")
+    let n = list.len(c.present)
+    for p in positions
+        if p < 0 or p >= n
+            return Err(DfRowOutOfRange(p, n))
+    Ok(gather(c, positions))
 
 // This column as a numeric array, refusing a null.
 //
@@ -356,7 +378,10 @@ pub fn take(c: DfColumn, positions: [Int]) -> Result<DfColumn, DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn to_floats(c: DfColumn) -> Result<NdFloat, DfFault>
-    todo("dataframe-nv.dfcolumn.to_floats")
+    let nulls = null_count(c)
+    if nulls > 0 and (kind(c) == DfFloatKind or kind(c) == DfIntKind)
+        return Err(DfNullInNumeric(c.name, nulls))
+    to_floats_or(c, 0.0)
 
 // This column as a numeric array, with every null replaced by a value
 // the caller names.
@@ -374,13 +399,23 @@ pub fn to_floats(c: DfColumn) -> Result<NdFloat, DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn to_floats_or(c: DfColumn, fill: Float) -> Result<NdFloat, DfFault>
-    todo("dataframe-nv.dfcolumn.to_floats_or")
+    match c.cells
+        DfFloatCells(vs) =>
+            var out: [Float] = []
+            for i in 0..list.len(vs)
+                list.push(out, (if c.present[i] then vs[i] else fill))
+            float_array(out)
+        DfIntCells(vs)   =>
+            var out: [Float] = []
+            for i in 0..list.len(vs)
+                list.push(out, (if c.present[i] then int.to_float(vs[i]) else fill))
+            float_array(out)
+        _                => Err(DfKindMismatch(DfFloatKind, kind(c)))
 
 // This column as an integer array, refusing a null.
 //
-// `DfKindMismatch` for anything but an Int column: a Float column does
-// NOT narrow here, because rounding a measurement into an identifier
-// is a mistake worth making the caller spell out with `cast`.
+// `DfKindMismatch` for anything but an Int column.  A Float column does
+// not narrow here; `cast` is the call that truncates.
 //
 // ```novo
 // use dfcolumn
@@ -391,7 +426,13 @@ pub fn to_floats_or(c: DfColumn, fill: Float) -> Result<NdFloat, DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn to_ints(c: DfColumn) -> Result<NdInt, DfFault>
-    todo("dataframe-nv.dfcolumn.to_ints")
+    match c.cells
+        DfIntCells(vs) =>
+            let nulls = null_count(c)
+            if nulls > 0
+                return Err(DfNullInNumeric(c.name, nulls))
+            int_array(vs)
+        _              => Err(DfKindMismatch(DfIntKind, kind(c)))
 
 // A Bool column as a mask, with every null read as false.
 //
@@ -408,14 +449,19 @@ pub fn to_ints(c: DfColumn) -> Result<NdInt, DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn mask(c: DfColumn) -> Result<NdMask, DfFault>
-    todo("dataframe-nv.dfcolumn.mask")
+    match c.cells
+        DfBoolCells(vs) =>
+            var out: [Bool] = []
+            for i in 0..list.len(vs)
+                list.push(out, c.present[i] and vs[i])
+            bool_array(out)
+        _               => Err(DfKindMismatch(DfBoolKind, kind(c)))
 
-// A mask of which rows are PRESENT.
+// A mask of which rows are present.
 //
-// The other half of the null story at the array boundary: rather than
-// filling or refusing, drop the missing rows and carry on with what is
-// there.  `dftable.filter` of this mask is how a notebook says
-// "complete cases only".
+// `dftable.filter` of this mask keeps the rows where this column has a
+// value, which is the third way to meet a null at the array boundary,
+// beside refusing it and filling it.
 //
 // ```novo
 // use dfcolumn
@@ -424,14 +470,18 @@ pub fn mask(c: DfColumn) -> Result<NdMask, DfFault>
 //     println("${ndbool.count(dfcolumn.present_mask(dfcolumn.ints("n", [1, 2])))}")
 // ```
 pub fn present_mask(c: DfColumn) -> NdMask
-    todo("dataframe-nv.dfcolumn.present_mask")
+    // The mask is bound before it is answered.  On novo 0.13.0 a `!` in
+    // the last expression of a function answers a wrong value.
+    let m = bool_array(c.present)!
+    m
 
 // A Float column over this rank-1 array, with no nulls.
 //
 // The way back from array arithmetic into a frame: compute with
-// ndarray-nv, name the result, put it back with
-// `dftable.with_column`.  `DfKindMismatch` for an array of any rank
-// but 1 — a frame's column is a sequence.
+// ndarray-nv, name the result, and put it back with
+// `dftable.with_column`.  An array of any rank but 1 is
+// `DfArrayFault(NdRankMismatch(1, rank))`, because a column is a
+// sequence.
 //
 // ```novo
 // use dfcolumn
@@ -445,7 +495,10 @@ pub fn present_mask(c: DfColumn) -> NdMask
 //         Err(e) => println(e.message())
 // ```
 pub fn of_floats(name: Str, a: NdFloat) -> Result<DfColumn, DfFault>
-    todo("dataframe-nv.dfcolumn.of_floats")
+    let r = ndfloat.rank(a)
+    if r != 1
+        return Err(DfArrayFault(NdRankMismatch(1, r)))
+    Ok(floats(name, ndfloat.to_list(a)))
 
 // An Int column over this rank-1 array, with no nulls.
 //
@@ -461,17 +514,24 @@ pub fn of_floats(name: Str, a: NdFloat) -> Result<DfColumn, DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn of_ints(name: Str, a: NdInt) -> Result<DfColumn, DfFault>
-    todo("dataframe-nv.dfcolumn.of_ints")
+    let r = ndint.rank(a)
+    if r != 1
+        return Err(DfArrayFault(NdRankMismatch(1, r)))
+    Ok(ints(name, ndint.to_list(a)))
 
 // The same column at a different element type.
 //
-// Int widens to Float exactly; Float narrows to Int by TRUNCATION
-// towards zero, which is `ndfloat.to_int`'s rule and the reason this
-// is a call the caller has to write rather than something `to_ints`
-// does quietly.  Bool casts to Int as 1 and 0.  Anything casts to Str
-// through `dfcell.render`, and Str parses back through
-// `dfcell.parse` — with a value that does not parse becoming NULL,
-// which is the one cast that can introduce missingness and says so.
+// A null stays null at every cast.  The casts, from each kind:
+//
+// - Int to Float widens.  Float to Int truncates towards zero, which is
+//   `ndfloat.to_int`'s rule, and an infinity or a not-a-number becomes
+//   a null.
+// - Bool to Int or Float is 1 and 0.
+// - Every kind casts to Str through `dfcell.render`.
+// - Str casts to every kind through `dfcell.parse`, and text that does
+//   not parse becomes a null.
+//
+// An Int or a Float has no cast to Bool: `DfKindMismatch`.
 //
 // ```novo
 // use dfcolumn
@@ -482,7 +542,15 @@ pub fn of_ints(name: Str, a: NdInt) -> Result<DfColumn, DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn cast(c: DfColumn, to: DfKind) -> Result<DfColumn, DfFault>
-    todo("dataframe-nv.dfcolumn.cast")
+    let from = kind(c)
+    let allowed = from == to or to == DfStrKind or from == DfStrKind
+        or from != DfFloatKind and to == DfFloatKind or from != DfIntKind and to == DfIntKind
+    if not allowed
+        return Err(DfKindMismatch(to, from))
+    var out: [DfCell] = []
+    for cell in cells_of(c)
+        list.push(out, convert(cell, to))
+    of_cells(c.name, out, to)
 
 // How many present values this column has.
 //
@@ -497,7 +565,7 @@ pub fn cast(c: DfColumn, to: DfKind) -> Result<DfColumn, DfFault>
 //     println("${dfcolumn.count(dfcolumn.ints("n", [1, 2, 3]))}")
 // ```
 pub fn count(c: DfColumn) -> Int
-    todo("dataframe-nv.dfcolumn.count")
+    list.len(c.present) - null_count(c)
 
 // The total of the present values.
 //
@@ -514,7 +582,20 @@ pub fn count(c: DfColumn) -> Int
 //         Err(e) => println(e.message())
 // ```
 pub fn sum(c: DfColumn) -> Result<DfCell, DfFault>
-    todo("dataframe-nv.dfcolumn.sum")
+    match c.cells
+        DfFloatCells(vs) =>
+            var total = 0.0
+            for i in 0..list.len(vs)
+                if c.present[i]
+                    total += vs[i]
+            Ok(DfFloatCell(total))
+        DfIntCells(vs)   =>
+            var total = 0
+            for i in 0..list.len(vs)
+                if c.present[i]
+                    total += vs[i]
+            Ok(DfIntCell(total))
+        _                => Err(DfKindMismatch(DfFloatKind, kind(c)))
 
 // The mean of the present values, always as a Float.
 //
@@ -531,7 +612,11 @@ pub fn sum(c: DfColumn) -> Result<DfCell, DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn mean(c: DfColumn) -> Result<Float, DfFault>
-    todo("dataframe-nv.dfcolumn.mean")
+    let values = to_floats_or(c, 0.0)!
+    let n = count(c)
+    if n == 0
+        return Err(DfEmptyGroup("mean"))
+    Ok(ndfloat.sum(values) / int.to_float(n))
 
 // The smallest present value.
 //
@@ -548,7 +633,7 @@ pub fn mean(c: DfColumn) -> Result<Float, DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn min(c: DfColumn) -> Result<DfCell, DfFault>
-    todo("dataframe-nv.dfcolumn.min")
+    extreme(c, Less, "min")
 
 // The largest present value, on `min`'s terms.
 //
@@ -561,13 +646,13 @@ pub fn min(c: DfColumn) -> Result<DfCell, DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn max(c: DfColumn) -> Result<DfCell, DfFault>
-    todo("dataframe-nv.dfcolumn.max")
+    extreme(c, Greater, "max")
 
-// How many DISTINCT present values this column has.
+// How many distinct present values this column has.
 //
-// What `describe` reports for a text column, where a mean means
-// nothing and the useful number is how many different things are in
-// there.
+// Two values are the same when `dfcell.key` says so, so the two zeros of
+// a float count once.  This is what `describe` reports as `unique`.
+
 //
 // ```novo
 // use dfcolumn
@@ -576,4 +661,132 @@ pub fn max(c: DfColumn) -> Result<DfCell, DfFault>
 //     println("${dfcolumn.unique_count(dfcolumn.strings("c", ["a", "a", "b"]))}")
 // ```
 pub fn unique_count(c: DfColumn) -> Int
-    todo("dataframe-nv.dfcolumn.unique_count")
+    var seen: HashSet<Str> = HashSet.new()
+    for i in 0..list.len(c.present)
+        if c.present[i]
+            seen.add(dfcell.key(cell_at(c, i)))
+    seen.len()
+
+// A present mask with every position set.
+fn all_present(n: Int) -> [Bool]
+    var out: [Bool] = []
+    for _ in 0..n
+        list.push(out, true)
+    out
+
+fn check_row(c: DfColumn, row: Int) -> Result<Unit, DfFault>
+    let n = list.len(c.present)
+    if row < 0 or row >= n
+        return Err(DfRowOutOfRange(row, n))
+    Ok()
+
+// One position as a cell, `DfNullCell` where the mask says so.  The
+// caller has checked the position.
+fn cell_at(c: DfColumn, i: Int) -> DfCell
+    if not c.present[i]
+        return DfNullCell
+    match c.cells
+        DfFloatCells(vs) => DfFloatCell(vs[i])
+        DfIntCells(vs)   => DfIntCell(vs[i])
+        DfBoolCells(vs)  => DfBoolCell(vs[i])
+        DfStrCells(vs)   => DfStrCell(vs[i])
+
+// The rows at checked positions, values and mask together.
+fn gather(c: DfColumn, positions: [Int]) -> DfColumn
+    var present: [Bool] = []
+    for p in positions
+        list.push(present, c.present[p])
+    let cells = match c.cells
+        DfFloatCells(vs) =>
+            var out: [Float] = []
+            for p in positions
+                list.push(out, vs[p])
+            DfFloatCells(out)
+        DfIntCells(vs)   =>
+            var out: [Int] = []
+            for p in positions
+                list.push(out, vs[p])
+            DfIntCells(out)
+        DfBoolCells(vs)  =>
+            var out: [Bool] = []
+            for p in positions
+                list.push(out, vs[p])
+            DfBoolCells(out)
+        DfStrCells(vs)   =>
+            var out: [Str] = []
+            for p in positions
+                list.push(out, vs[p])
+            DfStrCells(out)
+    DfColumn { name: c.name, cells: cells, present: present }
+
+// The value a cell of the column's own kind holds, and the kind's zero
+// for a null, which the present mask then says not to read.
+fn float_of(cell: DfCell) -> Float
+    match cell
+        DfFloatCell(v) => v
+        _              => 0.0
+
+fn int_of(cell: DfCell) -> Int
+    match cell
+        DfIntCell(v) => v
+        _            => 0
+
+fn bool_of(cell: DfCell) -> Bool
+    match cell
+        DfBoolCell(v) => v
+        _             => false
+
+fn str_of(cell: DfCell) -> Str
+    match cell
+        DfStrCell(v) => v
+        _            => ""
+
+// A rank-1 array over these values.  `of_list` refuses only a shape
+// whose size is not the data's length, and `[len]` is that length, so
+// the `Err` arm is never taken.
+fn float_array(xs: [Float]) -> Result<NdFloat, DfFault>
+    match ndfloat.of_list(xs, [list.len(xs)])
+        Ok(a)  => Ok(a)
+        // cov: skip — a shape of [len] always fits its data
+        Err(e) => Err(DfArrayFault(e))
+
+fn int_array(xs: [Int]) -> Result<NdInt, DfFault>
+    match ndint.of_list(xs, [list.len(xs)])
+        Ok(a)  => Ok(a)
+        // cov: skip — a shape of [len] always fits its data
+        Err(e) => Err(DfArrayFault(e))
+
+fn bool_array(xs: [Bool]) -> Result<NdMask, DfFault>
+    match ndbool.of_list(xs, [list.len(xs)])
+        Ok(m)  => Ok(m)
+        // cov: skip — a shape of [len] always fits its data
+        Err(e) => Err(DfArrayFault(e))
+
+// One cell at kind `to`.  Truncation takes a float towards zero, and a
+// float with no integer value, an infinity or a not-a-number, becomes a
+// null, as does text that does not parse.
+fn convert(cell: DfCell, to: DfKind) -> DfCell
+    match (cell, to)
+        (DfNullCell, _)              => DfNullCell
+        (_, DfStrKind)               => DfStrCell(dfcell.render(cell))
+        (DfIntCell(v), DfFloatKind)  => DfFloatCell(int.to_float(v))
+        (DfBoolCell(v), DfFloatKind) => DfFloatCell((if v then 1.0 else 0.0))
+        (DfBoolCell(v), DfIntKind)   => DfIntCell((if v then 1 else 0))
+        (DfFloatCell(v), DfIntKind)  =>
+            if v != v or v - v != 0.0
+                return DfNullCell
+            DfIntCell(float.to_int(v))
+        _                            => dfcell.parse(dfcell.render(cell), to) ?? DfNullCell
+
+// The present value that orders `want` against every other, or
+// `DfEmptyGroup` naming `what` when nothing is present.
+fn extreme(c: DfColumn, want: Ordering, what: Str) -> Result<DfCell, DfFault>
+    var best = DfNullCell
+    for i in 0..list.len(c.present)
+        if c.present[i]
+            let v = cell_at(c, i)
+            if best == DfNullCell or dfcell.compare(v, best) == Some(want)
+                best = v
+    if best == DfNullCell
+        return Err(DfEmptyGroup(what))
+    Ok(best)

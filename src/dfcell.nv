@@ -1,23 +1,19 @@
 // dfcell.nv — the four element types a column can hold, and one value
 // out of one.
 //
-// FOUR TYPES AND NOT MORE.  Float, Int, Bool, Str.  That is the set a
-// notebook corpus actually reaches for, and every one of the tempting
-// additions costs more than it returns at this size: a date needs a
-// calendar and a zone (calendar-nv and chrono-nv are their own rows on
-// the grid), a decimal needs an arithmetic this language does not have
-// yet, and a category is an Int column plus a dictionary the caller can
-// keep beside it.  A fifth type would appear in `DfCells`, in `DfKind`,
-// in `DfCell`, in every aggregation's match and in every cast — five
-// places per type — so the set stays small on purpose and grows when a
-// real notebook is blocked, not before.
+// A column holds 64-bit floats, 64-bit integers, truths or text.  A date
+// column, a decimal column and a categorical column are left out: a date
+// needs a calendar and a zone, a decimal needs its own arithmetic, and a
+// category is an Int column with a dictionary kept beside it.
 //
-// A `DfCell` IS ONE VALUE INCLUDING THE MISSING ONE.  `DfNullCell` is a
-// variant of the cell rather than a `?DfCell`, because an option of an
-// enum reads as two questions at every use site — is there a value, and
-// then which kind — and a notebook asks the second far more often than
-// the first.  The null MASK on the column is where missingness is
-// stored; `DfCell` is how one row's answer is handed back.
+// A `DfCell` is one value, and the missing value is one of its variants,
+// `DfNullCell`, rather than a `?DfCell`.  A caller reading a cell then
+// asks one question, which variant it holds, instead of two.  The
+// column's present mask is where missingness is stored; a cell is how one
+// row's answer is handed back.
+
+use std.str
+use std.math
 
 // Which of the four types a column holds.
 //
@@ -77,7 +73,12 @@ pub enum DfCell
 //         None    => println("missing")
 // ```
 pub fn kind_of(c: DfCell) -> ?DfKind
-    todo("dataframe-nv.dfcell.kind_of")
+    match c
+        DfFloatCell(_) => Some(DfFloatKind)
+        DfIntCell(_)   => Some(DfIntKind)
+        DfBoolCell(_)  => Some(DfBoolKind)
+        DfStrCell(_)   => Some(DfStrKind)
+        DfNullCell     => None
 
 // The kind's name, for a message or a `describe` row.
 //
@@ -91,14 +92,19 @@ pub fn kind_of(c: DfCell) -> ?DfKind
 //     println(dfcell.kind_name(DfStrKind))
 // ```
 pub fn kind_name(k: DfKind) -> Str
-    todo("dataframe-nv.dfcell.kind_name")
+    match k
+        DfFloatKind => "float"
+        DfIntKind   => "int"
+        DfBoolKind  => "bool"
+        DfStrKind   => "str"
 
 // One cell as text, for a message or a printed table.
 //
-// A null renders as the empty string, which is what a CSV writes and
-// what a printed frame shows.  A caller who needs "null" spelled out
-// matches `DfNullCell` themselves — this package does not decide how a
-// missing value LOOKS, it decides what it MEANS.
+// A null renders as the empty string, which is what a CSV writes.  A
+// caller who wants "null" spelled out matches `DfNullCell`.  A float is
+// written in its shortest form that reads back as the same number, with
+// `.0` added when that form has no point or exponent, so that `1.0`
+// reads back as a float and not as an integer.
 //
 // ```novo
 // use dfcell
@@ -107,16 +113,23 @@ pub fn kind_name(k: DfKind) -> Str
 //     println("[${dfcell.render(DfNullCell)}]")
 // ```
 pub fn render(c: DfCell) -> Str
-    todo("dataframe-nv.dfcell.render")
+    match c
+        DfFloatCell(v) => float_text(v)
+        DfIntCell(v)   => str.from_int(v)
+        DfBoolCell(v)  => str.from_bool(v)
+        DfStrCell(v)   => v
+        DfNullCell     => ""
 
 // One cell read out of text, at a named kind.
 //
-// The empty string is `DfNullCell` at every kind EXCEPT `DfStrKind`,
-// where it is the empty string — the one place those two readings
-// differ, and the one a CSV forces a decision about.  Text that does
-// not parse at the kind is `None`, which is a different answer from a
-// null: the caller can then choose between rejecting the row and
-// treating the failure as missing.
+// The empty string is `DfNullCell` at every kind except `DfStrKind`,
+// where it is the empty string.  Text that does not parse at the kind
+// is `None`, which is a different answer from a null: the caller chooses
+// between rejecting the row and treating the failure as missing.
+//
+// An integer is decimal digits with an optional sign.  A float is what
+// `str.to_float` reads, which includes `nan` and `inf`.  A truth is
+// `true` or `false`, in lower case.
 //
 // ```novo
 // use dfcell
@@ -127,7 +140,19 @@ pub fn render(c: DfCell) -> Str
 //         None    => println("not an int")
 // ```
 pub fn parse(text: Str, k: DfKind) -> ?DfCell
-    todo("dataframe-nv.dfcell.parse")
+    if text == ""
+        return if k == DfStrKind then Some(DfStrCell("")) else Some(DfNullCell)
+    match k
+        DfFloatKind =>
+            let Some(v) = str.to_float(text) else return None
+            Some(DfFloatCell(v))
+        DfIntKind   =>
+            let Some(v) = str.to_int(text) else return None
+            Some(DfIntCell(v))
+        DfBoolKind  =>
+            let Some(v) = str.to_bool(text) else return None
+            Some(DfBoolCell(v))
+        DfStrKind   => Some(DfStrCell(text))
 
 // The narrowest kind every one of these strings parses at.
 //
@@ -145,14 +170,34 @@ pub fn parse(text: Str, k: DfKind) -> ?DfCell
 //     println(dfcell.kind_name(dfcell.infer(["1", "", "3"])))
 // ```
 pub fn infer(texts: [Str]) -> DfKind
-    todo("dataframe-nv.dfcell.infer")
+    var seen = false
+    var ints = true
+    var floats = true
+    var bools = true
+    for t in texts
+        if t != ""
+            seen = true
+            ints = ints and str.to_int(t) != None
+            floats = floats and str.to_float(t) != None
+            bools = bools and str.to_bool(t) != None
+    if not seen
+        return DfStrKind
+    if ints
+        return DfIntKind
+    if floats
+        return DfFloatKind
+    if bools
+        return DfBoolKind
+    DfStrKind
 
 // How two cells order, for `dftable.sort`.
 //
-// `None` when they are not comparable — two different kinds, and
-// neither is null.  A null is comparable with everything and sorts
-// LAST in both directions; `dfcolumn`'s module comment is where that
-// rule lives.
+// `None` when they are not comparable: two different kinds, neither of
+// them null.  A null is comparable with everything and orders after
+// every value.  Floats follow the total order of SPEC section 13.6, with
+// every not-a-number after every number; `false` orders before `true`;
+// text orders by its bytes.
+
 //
 // ```novo
 // use dfcell
@@ -163,4 +208,64 @@ pub fn infer(texts: [Str]) -> DfKind
 //         None    => println("not comparable")
 // ```
 pub fn compare(left: DfCell, right: DfCell) -> ?Ordering
-    todo("dataframe-nv.dfcell.compare")
+    match (left, right)
+        (DfNullCell, DfNullCell)         => Some(Equal)
+        (DfNullCell, _)                  => Some(Greater)
+        (_, DfNullCell)                  => Some(Less)
+        (DfFloatCell(a), DfFloatCell(b)) => Some(float_order(a, b))
+        (DfIntCell(a), DfIntCell(b))     => Some(order_of(a < b, a > b))
+        (DfBoolCell(a), DfBoolCell(b))   => Some(order_of(not a and b, a and not b))
+        (DfStrCell(a), DfStrCell(b))     => Some(order_of(a < b, a > b))
+        _                                => None
+
+// A text that two cells share exactly when they hold the same value.
+//
+// The key a group-by and a join match on.  It carries the kind, so an
+// Int 1 and a Str "1" never share one, and it is length-prefixed, so the
+// keys of several columns can be joined into one without two different
+// tuples meeting.  The two zeros of a float share a key, and so does
+// every not-a-number.  The null cell has a key of its own; whether two
+// nulls then match is the caller's rule, and `dfcolumn`'s module comment
+// states it for this package.
+//
+// ```novo
+// use dfcell
+//
+// fn main() [io]
+//     println("${dfcell.key(DfIntCell(1)) == dfcell.key(DfStrCell("1"))}")
+// ```
+pub fn key(c: DfCell) -> Str
+    match c
+        DfFloatCell(v) => tagged("f", float_text((if v == 0.0 then 0.0 else v)))
+        DfIntCell(v)   => tagged("i", str.from_int(v))
+        DfBoolCell(v)  => tagged("b", str.from_bool(v))
+        DfStrCell(v)   => tagged("s", v)
+        DfNullCell     => "n"
+
+// A float as text that reads back as a float.  The shortest round-trip
+// form, with `.0` added when that form would read back as an integer, so
+// that a Float column written out and inferred again is a Float column.
+fn float_text(v: Float) -> Str
+    let t = str.from_float(v)
+    if str.contains(t, ".") or str.contains(t, "e") or str.contains(t, "n")
+        return t
+    "${t}.0"
+
+fn tagged(tag: Str, text: Str) -> Str
+    "${tag}${str.len(text)}:${text}"
+
+fn order_of(less: Bool, greater: Bool) -> Ordering
+    if less
+        return Less
+    if greater
+        return Greater
+    Equal
+
+// The total order of SPEC section 13.6: every not-a-number after every
+// number, and equal to each other.
+fn float_order(a: Float, b: Float) -> Ordering
+    let a_nan = a != a
+    let b_nan = b != b
+    if a_nan or b_nan
+        return order_of(b_nan and not a_nan, a_nan and not b_nan)
+    order_of(a < b, a > b)

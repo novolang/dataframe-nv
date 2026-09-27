@@ -1,37 +1,26 @@
-// dfjoin.nv — two frames matched on one key.
+// dfjoin.nv — two frames matched on one key column.
 //
-// TWO KINDS AND NOT SEVEN.  Inner and left.  A right join is a left
-// join with the arguments swapped and the columns reordered, which the
-// caller can write in one line and which is one fewer thing for this
-// package to get wrong; a full outer join needs a rule for a row that
-// matched on neither side and a decision about column order that no
-// two libraries agree on; a cross join is not a join on a key at all.
-// The measured subset is inner and left, and it stays that way until a
-// notebook is blocked.
+// There are two kinds of join, inner and left.  A right join is a left
+// join with the frames the other way round.
 //
-// ONE KEY COLUMN AND NOT SEVERAL.  A compound key is a column the
-// caller makes — `cast` both parts to Str and concatenate, or number
-// the distinct pairs — and doing that explicitly is clearer at the
-// call site than a key list whose two sides have to line up by
-// position.  It is also the honest measurement: notebook corpora join
-// on one column.
+// A join has one key column on each side.  A compound key is a column
+// the caller makes first, for example by casting the parts to Str and
+// concatenating them.
 //
-// A NULL KEY MATCHES NOTHING, including another null.  That is SQL's
-// rule and this package's, and it is the same rule stated in
-// `dfcolumn`'s module comment: two rows whose region is unknown are
-// not thereby in the same region.  In an inner join a null-keyed row
-// on either side simply does not appear; in a left join it appears
-// with every right column null, exactly as an unmatched row does.
+// A null key matches nothing, not even another null.  In an inner join a
+// row with a null key does not appear; in a left join it appears with
+// every right column null, as an unmatched row does.  `dfcolumn`'s
+// module comment states the rule for the whole package.
 //
-// THE OUTPUT ORDER IS THE LEFT FRAME'S, then the matches within each
-// left row in the right frame's order.  So a join of an already-sorted
-// left frame stays sorted, and a one-to-one join does not need a sort
-// afterwards.
-//
-// A ONE-TO-MANY JOIN DUPLICATES LEFT ROWS, as every join does.  The
-// result's row count is the number of matching pairs and can exceed
-// both inputs; that is not an error and is not warned about, but it is
-// the thing to check first when a joined frame is unexpectedly large.
+// The result is in the left frame's row order, and the matches of one
+// left row are in the right frame's order.  A left key that matches
+// several right rows appears once per match, so a result can be longer
+// than both inputs.
+
+use std.collections
+use dfcell
+use dfcolumn
+use dftable
 
 // Which rows survive a join.
 //
@@ -77,11 +66,11 @@ pub enum DfJoinKind
 //         Err(e) => println(e.message())
 // ```
 pub fn join(left: DfTable, right: DfTable, on: Str, how: DfJoinKind) -> Result<DfTable, DfFault>
-    todo("dataframe-nv.dfjoin.join")
+    join_with_suffix(left, right, on, on, how, "_right")
 
 // Two frames joined on differently named key columns.
 //
-// The key appears once in the result, under the LEFT column's name.
+// The key appears once in the result, under the left column's name.
 // Everything else is `join`'s rule.
 //
 // ```novo
@@ -100,16 +89,14 @@ pub fn join(left: DfTable, right: DfTable, on: Str, how: DfJoinKind) -> Result<D
 // ```
 pub fn join_on(left: DfTable, right: DfTable, left_on: Str, right_on: Str,
                how: DfJoinKind) -> Result<DfTable, DfFault>
-    todo("dataframe-nv.dfjoin.join_on")
+    join_with_suffix(left, right, left_on, right_on, how, "_right")
 
 // `join_on` with the collision suffix named.
 //
-// The whole reason this exists separately: `_right` is a default, not
-// a decision, and a frame whose columns already end in `_right`
-// deserves to say so rather than to get `_right_right`.  An empty
-// suffix makes a collision `DfDuplicateColumn` instead of renaming —
-// which is the strict reading, and the one a pipeline that must not
-// silently rename should ask for.
+// A right column whose name is already a left column's gets the suffix
+// appended.  An empty suffix makes a collision `DfDuplicateColumn`
+// instead, for a caller that must not have a column renamed.  A
+// suffixed name that collides again is `DfDuplicateColumn` too.
 //
 // ```novo
 // use dfjoin
@@ -124,20 +111,34 @@ pub fn join_on(left: DfTable, right: DfTable, left_on: Str, right_on: Str,
 // ```
 pub fn join_with_suffix(left: DfTable, right: DfTable, left_on: Str, right_on: Str, how: DfJoinKind,
                         suffix: Str) -> Result<DfTable, DfFault>
-    todo("dataframe-nv.dfjoin.join_with_suffix")
+    let pairs = join_positions(left, right, left_on, right_on, how)!
+    let lp = pairs[0]
+    let rp = pairs[1]
+    var out: [DfColumn] = []
+    for c in left.columns
+        list.push(out, dfcolumn.take(c, lp)!)
+    let taken = dftable.names(left)
+    for c in right.columns
+        if c.name != right_on
+            var name = c.name
+            if list.contains(taken, name)
+                if suffix == ""
+                    return Err(DfDuplicateColumn(name))
+                name = name + suffix
+            list.push(out, dfcolumn.rename(take_or_null(c, rp), name))
+    dftable.of_columns(out)
 
 // The matching row positions, as two lists, without building a frame.
 //
-// What a join computes on the way.  `left_positions[i]` and
-// `right_positions[i]` are the `i`-th matching pair; in a left join an
-// unmatched left row carries -1 on the right, which is the one place
-// this package uses a sentinel rather than an option — a `[?Int]`
-// would box every position of every matched row to describe the
-// unmatched few.
+// What a join computes on the way, as two lists: the answer's first
+// list holds left positions and its second the right positions, and
+// entry `i` of each is the `i`-th matching pair.  In a left join an
+// unmatched left row carries -1 on the right.  A sentinel is used
+// rather than an option so the positions stay a plain list of Int.
 //
-// It is `pub` because a caller who wants to join and then take only
-// some columns can do the gather themselves and skip building the wide
-// frame first.
+// A caller who wants only some columns of a join gathers them with
+// `dfcolumn.take`, without building the whole joined frame.
+
 //
 // ```novo
 // use dfjoin
@@ -152,4 +153,90 @@ pub fn join_with_suffix(left: DfTable, right: DfTable, left_on: Str, right_on: S
 // ```
 pub fn join_positions(left: DfTable, right: DfTable, left_on: Str, right_on: Str,
                       how: DfJoinKind) -> Result<[[Int]], DfFault>
-    todo("dataframe-nv.dfjoin.join_positions")
+    let lk = dftable.column(left, left_on)!
+    let rk = dftable.column(right, right_on)!
+    if dfcolumn.kind(lk) != dfcolumn.kind(rk)
+        return Err(DfKindMismatch(dfcolumn.kind(lk), dfcolumn.kind(rk)))
+    // The right rows grouped by key, each group in the right frame's
+    // order.  A null key is left out, so it matches nothing.
+    let right_cells = dfcolumn.cells_of(rk)
+    var index: HashMap<Str, Int> = HashMap.new()
+    var group_of: [Int] = []
+    var sizes: [Int] = []
+    for cell in right_cells
+        if cell == DfNullCell
+            list.push(group_of, -1)
+        else
+            let text = dfcell.key(cell)
+            match index.get(text)
+                Some(g) =>
+                    list.push(group_of, g)
+                    sizes[g] = sizes[g] + 1
+                None    =>
+                    let g = list.len(sizes)
+                    index.set(text, g)
+                    list.push(group_of, g)
+                    list.push(sizes, 1)
+    var starts: [Int] = [0]
+    for n in sizes
+        list.push(starts, starts[list.len(starts) - 1] + n)
+    var next = list.clone(starts)
+    var members: [Int] = []
+    for _ in right_cells
+        list.push(members, 0)
+    for i in 0..list.len(right_cells)
+        let g = group_of[i]
+        if g >= 0
+            members[next[g]] = i
+            next[g] = next[g] + 1
+    var lp: [Int] = []
+    var rp: [Int] = []
+    var i = 0
+    for cell in dfcolumn.cells_of(lk)
+        let found = if cell == DfNullCell
+            None
+        else
+            index.get(dfcell.key(cell))
+        match found
+            Some(g) =>
+                for m in members[starts[g]:starts[g + 1]]
+                    list.push(lp, i)
+                    list.push(rp, m)
+            None    =>
+                if how == DfLeftJoin
+                    list.push(lp, i)
+                    list.push(rp, -1)
+        i += 1
+    Ok([lp, rp])
+
+// The rows at these positions, with a null wherever the position is -1.
+// Every other position is inside the column.
+fn take_or_null(c: DfColumn, positions: [Int]) -> DfColumn
+    var present: [Bool] = []
+    for p in positions
+        list.push(present, p >= 0 and c.present[p])
+    let cells = match c.cells
+        DfFloatCells(vs) =>
+            var out: [Float] = []
+            for p in positions
+                list.push(out, (if p >= 0 then vs[p] else 0.0))
+            DfFloatCells(out)
+        DfIntCells(vs)   =>
+            var out: [Int] = []
+            for p in positions
+                list.push(out, (if p >= 0 then vs[p] else 0))
+            DfIntCells(out)
+        DfBoolCells(vs)  =>
+            var out: [Bool] = []
+            for p in positions
+                list.push(out, p >= 0 and vs[p])
+            DfBoolCells(out)
+        DfStrCells(vs)   =>
+            var out: [Str] = []
+            for p in positions
+                if p >= 0
+                    list.push(out, vs[p])
+                else
+                    list.push(out, "")
+            DfStrCells(out)
+    DfColumn { name: c.name, cells: cells, present: present }

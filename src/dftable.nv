@@ -1,36 +1,27 @@
 // dftable.nv — a frame: named columns over one shared length.
 //
-// THE INVARIANT IS ONE SENTENCE.  Every column in a frame has the same
-// length, and no two share a name.  `of_columns` is where both are
-// checked, and every other function here preserves them rather than
-// re-checking — which is why `of_columns` returns a `Result` and
-// `head` does not.
+// Every column in a frame has the same length, and no two share a name.
+// `of_columns` checks both, and every other function keeps them true.
 //
-// A FRAME HAS NO ROW INDEX, ON PURPOSE.  pandas has one, and it is
-// where most of the surprise in pandas lives: an operation silently
-// aligns on it, two frames that look compatible are not, and a reset
-// is the fix nobody remembers to write.  Here a row is a POSITION —
-// 0 to `rows(t) - 1` — and two frames combine only where the caller
-// says how: `join` on a named key, `concat_rows` by agreeing on
-// columns.  If a caller wants an index, it is a column, and they name
-// it in the join.  polars made the same choice.
+// A frame has no row index.  A row is a position from 0 to
+// `rows(t) - 1`, and two frames combine only where the caller says how:
+// `dfjoin.join` on a named key, or `concat_rows` by column name.  An
+// index a caller wants is a column, named in the join.  polars makes the
+// same choice; pandas aligns on an index.
 //
-// WHY `filter` TAKES AN `NdMask` AND NOT A PREDICATE FUNCTION.  A
-// predicate over a ROW would have to be handed a `[DfCell]` — one
-// tagged allocation per column per row — and would run once per row in
-// the caller's code.  A mask is computed COLUMN-wise, in ndarray-nv,
-// over unboxed doubles: `dfcolumn.to_floats` then `ndfloat.gt` then
-// this.  That is the shape every columnar frame has, and it is why the
-// ndarray-nv dependency is worth having.  The masks combine with
-// `ndbool.both` and `ndbool.either` before they get here.
+// `filter` takes an `NdMask` rather than a predicate over a row.  The
+// mask is computed a column at a time in ndarray-nv, over unboxed
+// numbers, and masks combine with `ndbool.both` and `ndbool.either`.
+// `sort` takes a list of key columns rather than a comparator, for the
+// same reason.  Nulls sort last in both directions.
 //
-// SORTING IS BY KEYS AND NOT BY A COMPARATOR, for the same reason: a
-// comparator is called O(n log n) times from the caller's code, and a
-// key list is read once per column.  `DfSortKey` carries the column
-// and the direction; nulls go last in both, which is the null rule.
-//
-// WHAT A NULL DOES, everywhere in this module: `dfcolumn`'s module
-// comment.
+// What a null does is stated once, in `dfcolumn`'s module comment.
+
+use std.collections
+use dfcell
+use dfcolumn
+use ndbool
+use ndshape
 
 // Named columns over one shared length.
 //
@@ -47,9 +38,8 @@ pub struct DfTable
     // caller's and is preserved by everything except `select`, which
     // takes the order it was given.
     columns: [DfColumn]
-    // How many rows every column has.  Carried rather than derived so
-    // that an EMPTY frame — no columns — still knows its length, which
-    // is what lets `with_column` on it check anything at all.
+    // How many rows every column has.  It is carried rather than
+    // derived, so a frame with no columns still has a length.
     rows: Int
 
 // How a sort orders by one column.
@@ -65,8 +55,7 @@ pub struct DfSortKey
     // The column to order by.  `DfNoSuchColumn` at sort time if the
     // frame does not have it.
     column: Str
-    // Largest first when true.  Nulls go LAST either way — see the
-    // null rule.
+    // Largest first when true.  Nulls go last either way.
     descending: Bool
 
 // A frame over these columns.
@@ -84,7 +73,17 @@ pub struct DfSortKey
 //         Err(e) => println(e.message())
 // ```
 pub fn of_columns(columns: [DfColumn]) -> Result<DfTable, DfFault>
-    todo("dataframe-nv.dftable.of_columns")
+    if list.len(columns) == 0
+        return Ok(empty())
+    let rows = dfcolumn.len(columns[0])
+    var seen: HashSet<Str> = HashSet.new()
+    for c in columns
+        if dfcolumn.len(c) != rows
+            return Err(DfLengthMismatch(rows, dfcolumn.len(c)))
+        if seen.has(c.name)
+            return Err(DfDuplicateColumn(c.name))
+        seen.add(c.name)
+    Ok(DfTable { columns: list.clone(columns), rows: rows })
 
 // The frame with no columns and no rows.
 //
@@ -95,7 +94,7 @@ pub fn of_columns(columns: [DfColumn]) -> Result<DfTable, DfFault>
 //     println("${dftable.rows(dftable.empty())}")
 // ```
 pub fn empty() -> DfTable
-    todo("dataframe-nv.dftable.empty")
+    DfTable { columns: [], rows: 0 }
 
 // A frame from a header and rows of text, with the kinds named.
 //
@@ -118,7 +117,20 @@ pub fn empty() -> DfTable
 //         Err(e) => println(e.message())
 // ```
 pub fn of_rows(header: [Str], rows: [[Str]], kinds: [DfKind]) -> Result<DfTable, DfFault>
-    todo("dataframe-nv.dftable.of_rows")
+    let width = list.len(header)
+    if list.len(kinds) != width
+        return Err(DfBadRange("${list.len(kinds)} kind(s) for ${width} column(s)"))
+    for r in rows
+        if list.len(r) != width
+            return Err(DfLengthMismatch(width, list.len(r)))
+    var columns: [DfColumn] = []
+    for j in 0..width
+        var cells: [DfCell] = []
+        for r in rows
+            list.push(cells, dfcell.parse(r[j], kinds[j]) ?? DfNullCell)
+        list.push(columns, dfcolumn.of_cells(header[j], cells, kinds[j])!)
+    let t = of_columns(columns)!
+    Ok(DfTable { columns: t.columns, rows: list.len(rows) })
 
 // How many rows this frame has.
 //
@@ -129,7 +141,7 @@ pub fn of_rows(header: [Str], rows: [[Str]], kinds: [DfKind]) -> Result<DfTable,
 //     println("${dftable.rows(dftable.empty())}")
 // ```
 pub fn rows(t: DfTable) -> Int
-    todo("dataframe-nv.dftable.rows")
+    t.rows
 
 // How many columns this frame has.
 //
@@ -140,7 +152,7 @@ pub fn rows(t: DfTable) -> Int
 //     println("${dftable.width(dftable.empty())}")
 // ```
 pub fn width(t: DfTable) -> Int
-    todo("dataframe-nv.dftable.width")
+    list.len(t.columns)
 
 // The column names, in frame order.
 //
@@ -151,7 +163,10 @@ pub fn width(t: DfTable) -> Int
 //     println("${dftable.names(dftable.empty())}")
 // ```
 pub fn names(t: DfTable) -> [Str]
-    todo("dataframe-nv.dftable.names")
+    var out: [Str] = []
+    for c in t.columns
+        list.push(out, c.name)
+    out
 
 // One column by name.  `DfNoSuchColumn` naming what was asked for.
 //
@@ -167,7 +182,10 @@ pub fn names(t: DfTable) -> [Str]
 //         Err(e) => println(e.message())
 // ```
 pub fn column(t: DfTable, name: Str) -> Result<DfColumn, DfFault>
-    todo("dataframe-nv.dftable.column")
+    for c in t.columns
+        if c.name == name
+            return Ok(c)
+    Err(DfNoSuchColumn(name))
 
 // Whether this frame has a column by that name.
 //
@@ -182,7 +200,10 @@ pub fn column(t: DfTable, name: Str) -> Result<DfColumn, DfFault>
 //     println("${dftable.has(dftable.empty(), "n")}")
 // ```
 pub fn has(t: DfTable, name: Str) -> Bool
-    todo("dataframe-nv.dftable.has")
+    for c in t.columns
+        if c.name == name
+            return true
+    false
 
 // These columns, in this order.
 //
@@ -203,7 +224,11 @@ pub fn has(t: DfTable, name: Str) -> Bool
 //         Err(e) => println(e.message())
 // ```
 pub fn select(t: DfTable, names: [Str]) -> Result<DfTable, DfFault>
-    todo("dataframe-nv.dftable.select")
+    var out: [DfColumn] = []
+    for n in names
+        list.push(out, column(t, n)!)
+    let picked = of_columns(out)!
+    Ok(DfTable { columns: picked.columns, rows: t.rows })
 
 // Every column except these.
 //
@@ -223,15 +248,21 @@ pub fn select(t: DfTable, names: [Str]) -> Result<DfTable, DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn drop(t: DfTable, names: [Str]) -> Result<DfTable, DfFault>
-    todo("dataframe-nv.dftable.drop")
+    for n in names
+        if not has(t, n)
+            return Err(DfNoSuchColumn(n))
+    var out: [DfColumn] = []
+    for c in t.columns
+        if not list.contains(names, c.name)
+            list.push(out, c)
+    Ok(DfTable { columns: out, rows: t.rows })
 
 // The frame with this column added, or the one of that name replaced.
 //
-// Adding and replacing are one call because they are one intention —
-// "this frame should have this column" — and splitting them would make
-// a notebook that reruns a cell fail the second time.  A replacement
-// keeps the column's ORIGINAL position; a new column goes on the end.
-// `DfLengthMismatch` when it is not the frame's length.
+// A replacement keeps the replaced column's position, and a new column
+// goes on the end.  `DfLengthMismatch` when the column is not the
+// frame's length.  A frame with no columns takes a column of any length
+// and has that many rows afterwards.
 //
 // ```novo
 // use dftable
@@ -245,7 +276,19 @@ pub fn drop(t: DfTable, names: [Str]) -> Result<DfTable, DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn with_column(t: DfTable, c: DfColumn) -> Result<DfTable, DfFault>
-    todo("dataframe-nv.dftable.with_column")
+    if list.len(t.columns) > 0 and dfcolumn.len(c) != t.rows
+        return Err(DfLengthMismatch(t.rows, dfcolumn.len(c)))
+    var out: [DfColumn] = []
+    var replaced = false
+    for old in t.columns
+        if old.name == c.name
+            list.push(out, c)
+            replaced = true
+        else
+            list.push(out, old)
+    if not replaced
+        list.push(out, c)
+    Ok(DfTable { columns: out, rows: dfcolumn.len(c) })
 
 // The frame with one column renamed, in place.
 //
@@ -264,7 +307,19 @@ pub fn with_column(t: DfTable, c: DfColumn) -> Result<DfTable, DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn rename(t: DfTable, from: Str, to: Str) -> Result<DfTable, DfFault>
-    todo("dataframe-nv.dftable.rename")
+    if not has(t, from)
+        return Err(DfNoSuchColumn(from))
+    if from == to
+        return Ok(t)
+    if has(t, to)
+        return Err(DfDuplicateColumn(to))
+    var out: [DfColumn] = []
+    for c in t.columns
+        if c.name == from
+            list.push(out, dfcolumn.rename(c, to))
+        else
+            list.push(out, c)
+    Ok(DfTable { columns: out, rows: t.rows })
 
 // The first `n` rows, or all of them if there are fewer.
 //
@@ -281,7 +336,14 @@ pub fn rename(t: DfTable, from: Str, to: Str) -> Result<DfTable, DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn head(t: DfTable, n: Int) -> DfTable
-    todo("dataframe-nv.dftable.head")
+    let stop = if n < 0
+        0
+    else
+        if n > t.rows
+            t.rows
+        else
+            n
+    window(t, 0, stop)
 
 // The last `n` rows, clamped like `head`.
 //
@@ -294,14 +356,21 @@ pub fn head(t: DfTable, n: Int) -> DfTable
 //         Err(e) => println(e.message())
 // ```
 pub fn tail(t: DfTable, n: Int) -> DfTable
-    todo("dataframe-nv.dftable.tail")
+    let count = if n < 0
+        0
+    else
+        if n > t.rows
+            t.rows
+        else
+            n
+    window(t, t.rows - count, t.rows)
 
 // The rows `[start, stop)`.
 //
-// Half-open, like every other range in this tier.  `DfBadRange` for a
-// start past its stop or a bound off the frame — unlike `head`, which
-// clamps, because a slice names both ends and getting one wrong is a
-// mistake rather than a shorthand.
+// The range is half-open.  `DfBadRange` for a start past its stop or a
+// bound off the frame.  Unlike `head`, a slice does not clamp, because
+// it names both ends.
+
 //
 // ```novo
 // use dftable
@@ -315,15 +384,15 @@ pub fn tail(t: DfTable, n: Int) -> DfTable
 //         Err(e) => println(e.message())
 // ```
 pub fn slice(t: DfTable, start: Int, stop: Int) -> Result<DfTable, DfFault>
-    todo("dataframe-nv.dftable.slice")
+    if start < 0 or stop > t.rows or start > stop
+        return Err(DfBadRange("rows [${start}, ${stop}) of a frame of ${t.rows}"))
+    Ok(window(t, start, stop))
 
 // The rows a mask keeps, in order.
 //
-// The mask is built column-wise — `dfcolumn.to_floats`, then an
-// `ndfloat` comparison, then `ndbool.both` to combine — which is why
-// this takes one rather than a predicate; the module comment argues
-// it.  `DfBadMask` when the mask is not the frame's length or is not
-// rank 1.
+// The mask is built a column at a time: `dfcolumn.to_floats`, then an
+// `ndfloat` comparison, then `ndbool.both` to combine two.  `DfBadMask`
+// when the mask is not the frame's length or is not rank 1.
 //
 // ```novo
 // use dftable
@@ -340,7 +409,15 @@ pub fn slice(t: DfTable, start: Int, stop: Int) -> Result<DfTable, DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn filter(t: DfTable, keep: NdMask) -> Result<DfTable, DfFault>
-    todo("dataframe-nv.dftable.filter")
+    let got = ndbool.size(keep)
+    if got != t.rows or ndshape.rank(ndbool.shape(keep)) != 1
+        return Err(DfBadMask(t.rows, got))
+    let marks = ndbool.to_list(keep)
+    var positions: [Int] = []
+    for i in 0..t.rows
+        if marks[i]
+            list.push(positions, i)
+    take(t, positions)
 
 // The rows at these positions, in the order given.
 //
@@ -359,14 +436,19 @@ pub fn filter(t: DfTable, keep: NdMask) -> Result<DfTable, DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn take(t: DfTable, positions: [Int]) -> Result<DfTable, DfFault>
-    todo("dataframe-nv.dftable.take")
+    for p in positions
+        if p < 0 or p >= t.rows
+            return Err(DfRowOutOfRange(p, t.rows))
+    var out: [DfColumn] = []
+    for c in t.columns
+        list.push(out, dfcolumn.take(c, positions)!)
+    Ok(DfTable { columns: out, rows: list.len(positions) })
 
 // The frame ordered by these keys, first key outermost.
 //
-// STABLE: rows that agree on every key keep their original order, so
-// sorting by city and then by name gives what sorting by (city, name)
-// gives.  Nulls go LAST in both directions — the null rule.
-// `DfNoSuchColumn` for a key the frame does not have.
+// The sort is stable: rows that agree on every key keep their original
+// order.  Nulls go last in both directions.  `DfNoSuchColumn` for a key
+// the frame does not have.
 //
 // ```novo
 // use dftable
@@ -380,13 +462,12 @@ pub fn take(t: DfTable, positions: [Int]) -> Result<DfTable, DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn sort(t: DfTable, keys: [DfSortKey]) -> Result<DfTable, DfFault>
-    todo("dataframe-nv.dftable.sort")
+    take(t, sort_positions(t, keys)!)
 
 // The positions that would sort this frame, without moving anything.
 //
-// What `sort` computes on the way, exposed because a caller often
-// wants to apply one frame's order to ANOTHER frame — the labels
-// beside the measurements — and `take` is how they do it.
+// What `sort` computes on the way.  `take` applies it, to this frame or
+// to another frame of the same length.
 //
 // ```novo
 // use dftable
@@ -400,7 +481,35 @@ pub fn sort(t: DfTable, keys: [DfSortKey]) -> Result<DfTable, DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn sort_positions(t: DfTable, keys: [DfSortKey]) -> Result<[Int], DfFault>
-    todo("dataframe-nv.dftable.sort_positions")
+    var keyed: [[DfCell]] = []
+    for k in keys
+        list.push(keyed, dfcolumn.cells_of(column(t, k.column)!))
+    var order: [Int] = []
+    for i in 0..t.rows
+        list.push(order, i)
+    var spare: [Int] = []
+    for i in 0..t.rows
+        list.push(spare, i)
+    // A bottom-up merge sort, which is stable: of two rows that agree on
+    // every key, the one from the left run is taken first.
+    var width = 1
+    while width < t.rows
+        var lo = 0
+        while lo < t.rows
+            let mid = if lo + width < t.rows
+                lo + width
+            else
+                t.rows
+            let hi = if lo + 2 * width < t.rows
+                lo + 2 * width
+            else
+                t.rows
+            merge(order, spare, lo, mid, hi, keyed, keys)
+            lo = hi
+        for i in 0..t.rows
+            order[i] = spare[i]
+        width = width * 2
+    Ok(order)
 
 // One row, as cells in column order.
 //
@@ -418,7 +527,12 @@ pub fn sort_positions(t: DfTable, keys: [DfSortKey]) -> Result<[Int], DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn row_cells(t: DfTable, row: Int) -> Result<[DfCell], DfFault>
-    todo("dataframe-nv.dftable.row_cells")
+    if row < 0 or row >= t.rows
+        return Err(DfRowOutOfRange(row, t.rows))
+    var out: [DfCell] = []
+    for c in t.columns
+        list.push(out, dfcolumn.cell(c, row)!)
+    Ok(out)
 
 // Every row as text, in column order — the shape a writer wants.
 //
@@ -435,16 +549,24 @@ pub fn row_cells(t: DfTable, row: Int) -> Result<[DfCell], DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn to_rows(t: DfTable) -> [[Str]]
-    todo("dataframe-nv.dftable.to_rows")
+    var texts: [[DfCell]] = []
+    for c in t.columns
+        list.push(texts, dfcolumn.cells_of(c))
+    var out: [[Str]] = []
+    for i in 0..t.rows
+        var row: [Str] = []
+        for cells in texts
+            list.push(row, dfcell.render(cells[i]))
+        list.push(out, row)
+    out
 
 // Two frames stacked, row-wise.
 //
-// They must have the same column NAMES — in any order, matched by name
-// and not by position, because matching by position is how two frames
-// that look alike get silently interleaved — and each matching pair
-// must have the same kind.  `DfNoSuchColumn` names the first column
-// one side has and the other does not; `DfKindMismatch` names a pair
-// that disagrees.
+// The two frames must have the same column names, in any order.
+// Columns are matched by name and not by position, and each matched
+// pair must have the same kind.  The result has the top frame's column
+// order.  `DfNoSuchColumn` names a column one side has and the other
+// does not; `DfKindMismatch` names the kinds of a pair that disagrees.
 //
 // ```novo
 // use dftable
@@ -458,7 +580,18 @@ pub fn to_rows(t: DfTable) -> [[Str]]
 //         Err(e) => println(e.message())
 // ```
 pub fn concat_rows(top: DfTable, bottom: DfTable) -> Result<DfTable, DfFault>
-    todo("dataframe-nv.dftable.concat_rows")
+    for c in bottom.columns
+        if not has(top, c.name)
+            return Err(DfNoSuchColumn(c.name))
+    var out: [DfColumn] = []
+    for c in top.columns
+        let other = column(bottom, c.name)!
+        if dfcolumn.kind(other) != dfcolumn.kind(c)
+            return Err(DfKindMismatch(dfcolumn.kind(c), dfcolumn.kind(other)))
+        var cells = dfcolumn.cells_of(c)
+        list.append(cells, dfcolumn.cells_of(other))
+        list.push(out, dfcolumn.of_cells(c.name, cells, dfcolumn.kind(c))!)
+    Ok(DfTable { columns: out, rows: top.rows + bottom.rows })
 
 // The rows with no nulls in any of the named columns.
 //
@@ -478,4 +611,64 @@ pub fn concat_rows(top: DfTable, bottom: DfTable) -> Result<DfTable, DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn drop_nulls(t: DfTable, columns: [Str]) -> Result<DfTable, DfFault>
-    todo("dataframe-nv.dftable.drop_nulls")
+    let chosen = if list.len(columns) == 0
+        names(t)
+    else
+        columns
+    var keep: [Bool] = []
+    for _ in 0..t.rows
+        list.push(keep, true)
+    for n in chosen
+        let c = column(t, n)!
+        for i in 0..t.rows
+            keep[i] = keep[i] and c.present[i]
+    var positions: [Int] = []
+    for i in 0..t.rows
+        if keep[i]
+            list.push(positions, i)
+    take(t, positions)
+
+// The rows `[start, stop)`, bounds already inside the frame.
+fn window(t: DfTable, start: Int, stop: Int) -> DfTable
+    var out: [DfColumn] = []
+    for c in t.columns
+        list.push(out, slice_column(c, start, stop))
+    DfTable { columns: out, rows: stop - start }
+
+fn slice_column(c: DfColumn, start: Int, stop: Int) -> DfColumn
+    let cells = match c.cells
+        DfFloatCells(vs) => DfFloatCells(vs[start:stop])
+        DfIntCells(vs)   => DfIntCells(vs[start:stop])
+        DfBoolCells(vs)  => DfBoolCells(vs[start:stop])
+        DfStrCells(vs)   => DfStrCells(vs[start:stop])
+    DfColumn { name: c.name, cells: cells, present: c.present[start:stop] }
+
+// Merge the sorted runs `order[lo..mid]` and `order[mid..hi]` into
+// `into[lo..hi]`.
+fn merge(order: [Int], var into: [Int], lo: Int, mid: Int, hi: Int, keyed: [[DfCell]],
+         keys: [DfSortKey])
+    var i = lo
+    var j = mid
+    var k = lo
+    while k < hi
+        let take_left = j >= hi or i < mid and row_order(order[i], order[j], keyed, keys) != Greater
+        if take_left
+            into[k] = order[i]
+            i += 1
+        else
+            into[k] = order[j]
+            j += 1
+        k += 1
+
+// How row `a` orders against row `b` under the keys.  A null goes last
+// whichever the direction, so only the order between two values turns
+// round for a descending key.
+fn row_order(a: Int, b: Int, keyed: [[DfCell]], keys: [DfSortKey]) -> Ordering
+    for n in 0..list.len(keys)
+        let x = keyed[n][a]
+        let y = keyed[n][b]
+        let o = dfcell.compare(x, y) ?? Equal
+        if o != Equal
+            let flip = keys[n].descending and x != DfNullCell and y != DfNullCell
+            return if flip then (if o == Less then Greater else Less) else o
+    Equal

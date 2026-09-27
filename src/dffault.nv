@@ -1,24 +1,17 @@
-// dffault.nv — the one thing that can go wrong, and the ten ways it
-// does.
+// dffault.nv — every reason an operation in this package refuses.
 //
-// ONE ERROR TYPE FOR THE WHOLE PACKAGE, for the same reason ndarray-nv
-// has one: every failure here is the caller asking for something the
-// data does not admit — a column that is not there, two columns of
-// different lengths, a sum over strings, a row off the end.  A second
-// error type would only make a caller decide which `match` to write.
+// The package has one error type, as ndarray-nv does.  Every failure
+// here is a request the data does not admit: a column that is not there,
+// two columns of different lengths, a sum over text, a row off the end.
 //
-// EVERY VARIANT NAMES WHAT IT WAS ASKED ABOUT.  A frame has many
-// columns and a message that does not say which one sends the reader
-// back to count them.  So `DfNoSuchColumn` carries the name that was
-// asked for, `DfLengthMismatch` carries both lengths, and
-// `DfKindMismatch` carries both kinds.
+// Every variant carries what it was asked about.  `DfNoSuchColumn`
+// carries the name that was asked for, `DfLengthMismatch` both lengths,
+// `DfKindMismatch` both kinds and `DfRaggedRecord` the line of the
+// record.
 //
-// `DfArrayFault` IS THE SEAM WITH ndarray-nv.  A numeric column becomes
-// an `NdFloat` and array arithmetic can fail on its own terms; rather
-// than restate those nine failures here, that variant carries the
-// `NdFault` whole and its message prints through.  So a caller who
-// matches on `DfArrayFault` gets the array's own reason, and one who
-// only calls `message()` never has to know there are two enums.
+// `DfArrayFault` carries an `NdFault` from ndarray-nv unchanged, and its
+// message includes that fault's message.  A caller who only calls
+// `message()` does not need to know there are two error types.
 
 // What a frame operation could not do.
 //
@@ -33,18 +26,16 @@ pub enum DfFault
     // A column the frame does not have.  The name is what the caller
     // typed, so a typo shows as itself rather than as a position.
     DfNoSuchColumn(name: Str)
-    // Two columns in one frame with the same name.  Refused at
-    // construction rather than tolerated, because every later
-    // selection by name would have to pick one and no rule for
-    // picking is better than the caller renaming.
+    // Two columns in one frame with the same name.  A frame refuses it
+    // when it is made, so a selection by name always has one answer.
     DfDuplicateColumn(name: Str)
-    // A column being added to a frame, or joined with one, whose
-    // length is not the frame's.  A frame's whole invariant is that
-    // every column is the same length; this is that invariant
-    // reporting itself.
+    // A column whose length is not the frame's, a row of text not as
+    // wide as its header, or a grouping handed a frame of another
+    // length.  `want` is the length the operation was committed to.
     DfLengthMismatch(want: Int, got: Int)
     // An operation asked of a column whose element type cannot answer
-    // it: a mean of strings, a join on a bool key against a float one.
+    // it: a mean of text, a join of an Int key with a Str key, a cast
+    // of a number to a truth.
     DfKindMismatch(want: DfKind, got: DfKind)
     // A conversion to a numeric array over a column that has nulls in
     // it, with no fill named.  See `dfcolumn`'s module comment: this
@@ -52,8 +43,10 @@ pub enum DfFault
     DfNullInNumeric(name: Str, nulls: Int)
     // A row number off the end of the frame.
     DfRowOutOfRange(row: Int, rows: Int)
-    // A slice, a head or a tail whose bounds describe no frame: a
-    // negative count, or a start past its stop.
+    // A slice whose bounds describe no frame, a quantile outside
+    // `[0, 1]`, an empty group-by key list, or a list of kinds whose
+    // length is not the header's.  `what` names the request.
+
     DfBadRange(what: Str)
     // An aggregation or a summary over no rows at all, where the
     // answer would have to be invented.  `count` and `sum` answer for
@@ -63,6 +56,9 @@ pub enum DfFault
     // whose rank is not 1.  A frame's rows are a sequence, so a
     // selection over them is too.
     DfBadMask(want: Int, got: Int)
+    // A CSV record whose field count is not the header's.  `line` is
+    // the line the record started on, as csv-nv counts it from 1.
+    DfRaggedRecord(line: Int, want: Int, got: Int)
     // The array arithmetic underneath said no.  The `NdFault` is
     // carried whole rather than restated.
     DfArrayFault(cause: NdFault)
@@ -75,23 +71,25 @@ pub enum DfFault
 impl Error for DfFault
     fn message(self) -> Str
         match self
-            DfNoSuchColumn(name)         =>
+            DfNoSuchColumn(name)            =>
                 "no column named `${name}`"
-            DfDuplicateColumn(name)      =>
+            DfDuplicateColumn(name)         =>
                 "two columns named `${name}` in one frame"
-            DfLengthMismatch(want, got)  =>
+            DfLengthMismatch(want, got)     =>
                 "a column of ${got} row(s) in a frame of ${want}"
-            DfKindMismatch(want, got)    =>
-                "a ${dfcell.kind_name(got)} column where a ${dfcell.kind_name(want)} one was needed"
-            DfNullInNumeric(name, nulls) =>
+            DfKindMismatch(want, got)       =>
+                "a column of kind ${dfcell.kind_name(got)} where ${dfcell.kind_name(want)} was needed"
+            DfNullInNumeric(name, nulls)    =>
                 "`${name}` has ${nulls} null(s) and no fill was named"
-            DfRowOutOfRange(row, rows)   =>
+            DfRowOutOfRange(row, rows)      =>
                 "row ${row} of a frame with ${rows} row(s)"
-            DfBadRange(what)             =>
+            DfBadRange(what)                =>
                 "${what} describes no frame"
-            DfEmptyGroup(what)           =>
+            DfEmptyGroup(what)              =>
                 "${what} of an empty group has no value"
-            DfBadMask(want, got)         =>
+            DfBadMask(want, got)            =>
                 "a mask over ${got} row(s) against a frame of ${want}"
-            DfArrayFault(cause)          =>
+            DfRaggedRecord(line, want, got) =>
+                "line ${line} has ${got} field(s) where the header names ${want}"
+            DfArrayFault(cause)             =>
                 "the array underneath: ${cause.message()}"

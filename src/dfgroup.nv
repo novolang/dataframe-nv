@@ -1,36 +1,28 @@
-// dfgroup.nv — split by key, aggregate, and put the answer back in a
-// frame.
+// dfgroup.nv — split a frame by key, aggregate each group, and put the
+// answers back in a frame.
 //
-// A GROUPING IS POSITIONS, NOT FRAMES.  `DfGroups` holds the distinct
-// key rows and, for each, the POSITIONS in the original frame that
-// belong to it.  It does not hold sub-frames: materialising one frame
-// per group copies every value in the original once more, for a
-// grouping whose whole use is usually a single `aggregate` call.  So a
-// group is a window into a frame the caller still holds, and
-// `dfgroup.frame_of` is there for the case where somebody really does
-// want one group as a frame.
+// A grouping holds positions, not frames.  `DfGroups` holds the distinct
+// key rows and, for each group, the positions in the original frame that
+// belong to it.  `frame_of` copies one group out as a frame when that is
+// wanted.
 //
-// THE POSITIONS ARE FLAT, IN TWO LISTS.  `starts` says where each
-// group's positions begin inside `members`, and the group's length is
-// the next start minus its own — with a final entry so the last group
-// needs no special case.  One list of Ints rather than a list of lists
-// of Ints: the same data, one allocation instead of one per group, and
-// a grouping of a million rows into a million groups is a real shape.
+// The positions are two flat lists.  `starts[i]` is where group `i`'s
+// positions begin inside `members`, and `starts` carries one entry more
+// than there are groups, so group `i` is always
+// `members[starts[i]:starts[i + 1]]`.
 //
-// GROUPS COME OUT IN FIRST-APPEARANCE ORDER.  Not sorted: sorting is
-// `dftable.sort` on the result and costs nothing extra when it is
-// wanted, whereas an ordering imposed here cannot be undone.  polars
-// makes the same choice, and it is the one that makes a group-by
-// reproducible without deciding how text orders.
+// Groups come out in first-appearance order, as in polars.  A sorted
+// order is `dftable.sort` on the result.
 //
-// A NULL KEY IS A GROUP.  Unlike a join key, where a null matches
-// nothing — the two rules differ because the questions differ.
-// "How many rows have no region?" is a question a notebook asks and
-// pandas answers with silence, having dropped them.  Every row is in
-// exactly one group here, so the group sizes always sum to the
-// frame's row count, and that is a property worth being able to rely
-// on.  `dfcolumn`'s module comment is where the rest of the null rule
-// lives.
+// A null key is a group of its own, so every row is in exactly one group
+// and the group sizes sum to the frame's row count.  pandas drops those
+// rows by default.  In a join key, by contrast, a null matches nothing;
+// `dfcolumn`'s module comment states both rules.
+
+use std.collections
+use dfcell
+use dfcolumn
+use dftable
 
 // A frame split into groups, as positions into that frame.
 //
@@ -73,9 +65,8 @@ pub struct DfGroups
 //     println("${DfMean == DfMean}")
 // ```
 pub enum DfAgg
-    // How many PRESENT values — not how many rows.  `dfgroup.sizes` is
-    // the row count, and the difference between them is how many are
-    // missing.
+    // How many present values, not how many rows.  `dfgroup.sizes` is
+    // the row count, and the difference is how many are missing.
     DfCount
     // The total of the present values; the type's zero for a group
     // with none.
@@ -99,7 +90,7 @@ pub enum DfAgg
 //     println(s.into)
 // ```
 pub struct DfAggSpec
-    // The column of the ORIGINAL frame to aggregate.
+    // The column of the grouped frame to aggregate.
     column: Str
     // Which aggregation.
     how: DfAgg
@@ -129,7 +120,46 @@ pub struct DfAggSpec
 //         Err(e) => println(e.message())
 // ```
 pub fn by(t: DfTable, keys: [Str]) -> Result<DfGroups, DfFault>
-    todo("dataframe-nv.dfgroup.by")
+    if list.len(keys) == 0
+        return Err(DfBadRange("an empty key list"))
+    let key_frame = dftable.select(t, keys)!
+    var cells: [[DfCell]] = []
+    for c in key_frame.columns
+        list.push(cells, dfcolumn.cells_of(c))
+    // Each row's key text, and the group it opens or joins.
+    var index: HashMap<Str, Int> = HashMap.new()
+    var group_of: [Int] = []
+    var firsts: [Int] = []
+    var sizes: [Int] = []
+    for i in 0..t.rows
+        var text = ""
+        for column_cells in cells
+            text = text + dfcell.key(column_cells[i])
+        match index.get(text)
+            Some(g) =>
+                list.push(group_of, g)
+                sizes[g] = sizes[g] + 1
+            None    =>
+                let g = list.len(firsts)
+                index.set(text, g)
+                list.push(group_of, g)
+                list.push(firsts, i)
+                list.push(sizes, 1)
+    // A counting sort of the positions by group, which keeps the frame's
+    // order inside each group.
+    var starts: [Int] = [0]
+    for n in sizes
+        list.push(starts, starts[list.len(starts) - 1] + n)
+    var next = list.clone(starts)
+    var members: [Int] = []
+    for _ in 0..t.rows
+        list.push(members, 0)
+    for i in 0..t.rows
+        let g = group_of[i]
+        members[next[g]] = i
+        next[g] = next[g] + 1
+    let key_rows = dftable.take(key_frame, firsts)!
+    Ok(DfGroups { keys: key_rows, starts: starts, members: members, source_rows: t.rows })
 
 // How many groups there are.
 //
@@ -145,7 +175,7 @@ pub fn by(t: DfTable, keys: [Str]) -> Result<DfGroups, DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn count(g: DfGroups) -> Int
-    todo("dataframe-nv.dfgroup.count")
+    list.len(g.starts) - 1
 
 // The distinct key rows, one per group, in group order.
 //
@@ -161,9 +191,10 @@ pub fn count(g: DfGroups) -> Int
 //         Err(e) => println(e.message())
 // ```
 pub fn keys(g: DfGroups) -> DfTable
-    todo("dataframe-nv.dfgroup.keys")
+    g.keys
 
-// How many ROWS are in each group, as an Int column.
+// How many rows are in each group, as an Int column.
+
 //
 // Not how many present values — that is `DfCount` on a named column.
 // These sizes always sum to the frame's row count, because a null key
@@ -181,7 +212,10 @@ pub fn keys(g: DfGroups) -> DfTable
 //         Err(e) => println(e.message())
 // ```
 pub fn sizes(g: DfGroups, into: Str) -> DfColumn
-    todo("dataframe-nv.dfgroup.sizes")
+    var out: [Int] = []
+    for i in 0..count(g)
+        list.push(out, g.starts[i + 1] - g.starts[i])
+    dfcolumn.ints(into, out)
 
 // The row positions of one group.
 //
@@ -207,7 +241,10 @@ pub fn sizes(g: DfGroups, into: Str) -> DfColumn
 //         Err(e) => println(e.message())
 // ```
 pub fn positions(g: DfGroups, group: Int) -> Result<[Int], DfFault>
-    todo("dataframe-nv.dfgroup.positions")
+    let n = count(g)
+    if group < 0 or group >= n
+        return Err(DfRowOutOfRange(group, n))
+    Ok(g.members[g.starts[group]:g.starts[group + 1]])
 
 // One group as a frame of its own.
 //
@@ -230,7 +267,8 @@ pub fn positions(g: DfGroups, group: Int) -> Result<[Int], DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn frame_of(g: DfGroups, t: DfTable, group: Int) -> Result<DfTable, DfFault>
-    todo("dataframe-nv.dfgroup.frame_of")
+    check_frame(g, t)!
+    dftable.take(t, positions(g, group)!)
 
 // One aggregation over one column, as a column with one row per group.
 //
@@ -254,7 +292,21 @@ pub fn frame_of(g: DfGroups, t: DfTable, group: Int) -> Result<DfTable, DfFault>
 //         Err(e) => println(e.message())
 // ```
 pub fn agg(g: DfGroups, t: DfTable, spec: DfAggSpec) -> Result<DfColumn, DfFault>
-    todo("dataframe-nv.dfgroup.agg")
+    check_frame(g, t)!
+    let source = dftable.column(t, spec.column)!
+    let k = dfcolumn.kind(source)
+    let numeric = k == DfFloatKind or k == DfIntKind
+    if not numeric and (spec.how == DfSum or spec.how == DfMean)
+        return Err(DfKindMismatch(DfFloatKind, k))
+    var out: [DfCell] = []
+    for i in 0..count(g)
+        let part = dfcolumn.take(source, g.members[g.starts[i]:g.starts[i + 1]])!
+        list.push(out, one(part, spec.how)!)
+    let into = match spec.how
+        DfCount => DfIntKind
+        DfMean  => DfFloatKind
+        _       => k
+    dfcolumn.of_cells(spec.into, out, into)
 
 // The key columns beside every aggregation, as one frame.
 //
@@ -278,4 +330,23 @@ pub fn agg(g: DfGroups, t: DfTable, spec: DfAggSpec) -> Result<DfColumn, DfFault
 //         Err(e) => println(e.message())
 // ```
 pub fn aggregate(g: DfGroups, t: DfTable, specs: [DfAggSpec]) -> Result<DfTable, DfFault>
-    todo("dataframe-nv.dfgroup.aggregate")
+    var columns = list.clone(g.keys.columns)
+    for spec in specs
+        list.push(columns, agg(g, t, spec)!)
+    dftable.of_columns(columns)
+
+// A grouping is positions into one frame; a frame of another length
+// cannot be the one it was made from.
+fn check_frame(g: DfGroups, t: DfTable) -> Result<Unit, DfFault>
+    if dftable.rows(t) != g.source_rows
+        return Err(DfLengthMismatch(g.source_rows, dftable.rows(t)))
+    Ok()
+
+// One aggregation over one group's part of a column.
+fn one(part: DfColumn, how: DfAgg) -> Result<DfCell, DfFault>
+    match how
+        DfCount => Ok(DfIntCell(dfcolumn.count(part)))
+        DfSum   => dfcolumn.sum(part)
+        DfMean  => Ok(DfFloatCell(dfcolumn.mean(part)!))
+        DfMin   => dfcolumn.min(part)
+        DfMax   => dfcolumn.max(part)
