@@ -1,11 +1,5 @@
 // dfcell_tests.nv — the API suite for the four element types and one
 // value out of one.
-//
-// RED ON PURPOSE, like every suite in this package: the bodies are
-// `todo()`, so each assertion reaches `not implemented:
-// dataframe-nv.dfcell.<fn>`.  `novo test tests/dfcell_tests.nv
-// --isolate` gives every `@test` its own process and names the
-// function it stopped at.
 
 use std.test
 use dfcell

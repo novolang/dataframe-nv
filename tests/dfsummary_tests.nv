@@ -1,13 +1,8 @@
-// dfsummary_tests.nv — the API suite for describe, and for the csv
+// dfsummary_tests.nv — the API suite for describe, and for the CSV
 // bridge.
 //
-// RED ON PURPOSE: every body is a `todo()`, so each assertion reaches
-// `not implemented: dataframe-nv.<module>.<fn>`.
-//
-// The shape being pinned down here is that every number that may not
-// exist is typed as not existing — a Str column has no mean, a
-// one-value column has no sample standard deviation — so a caller who
-// forgets is stopped by the compiler rather than by a plausible zero.
+// Every number that may not exist is optional: a Str column has no
+// mean, and a column with one value has no sample standard deviation.
 
 use std.test
 use dfsummary

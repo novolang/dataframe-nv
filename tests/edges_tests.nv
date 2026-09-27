@@ -1,0 +1,293 @@
+// edges_tests.nv — the refusals, the messages, the rarer kinds and the
+// CSV round trip through csv-nv's reader and writer.
+//
+// The API suites state the rules on the common case.  This suite
+// reaches the cases they leave out: a Bool column where an Int column
+// was used, a cast that has no meaning, a grouping handed the wrong
+// frame, and every refusal's message.
+
+use std.test
+use std.bytes
+use dfcell
+use dfcolumn
+use dftable
+use dfgroup
+use dfjoin
+use dfsummary
+use dfcsv
+use dffault
+use ndfloat
+use ndint
+use reader
+use writer
+use dialect
+
+// [true, _, false] with the middle missing.
+fn flags() -> DfColumn
+    DfColumn { name: "ok", cells: DfBoolCells([true, false, false]), present: [true, false, true] }
+
+fn empty_floats() -> DfColumn
+    DfColumn { name: "w", cells: DfFloatCells([0.0, 0.0]), present: [false, false] }
+
+@test
+fn test_bool_and_float_cells_parse_render_and_order() [io]
+    test.case("a bool cell has the bool kind")
+    test.assert(dfcell.kind_of(DfBoolCell(true)) == Some(DfBoolKind))
+
+    test.case("a float renders with a point, so it reads back as a float")
+    test.assert(dfcell.render(DfFloatCell(1.0)) == "1.0")
+    test.assert(dfcell.render(DfFloatCell(2.5)) == "2.5")
+    test.assert(dfcell.render(DfFloatCell(1e300)) == "1e+300")
+
+    test.case("floats and truths parse at their kinds")
+    test.assert(dfcell.parse("2.5", DfFloatKind) == Some(DfFloatCell(2.5)))
+    test.assert(dfcell.parse("x", DfFloatKind) == None)
+    test.assert(dfcell.parse("true", DfBoolKind) == Some(DfBoolCell(true)))
+    test.assert(dfcell.parse("yes", DfBoolKind) == None)
+
+    test.case("false orders before true")
+    test.assert(dfcell.compare(DfBoolCell(false), DfBoolCell(true)) == Some(Less))
+    test.assert(dfcell.compare(DfBoolCell(true), DfBoolCell(false)) == Some(Greater))
+
+    test.case("a not-a-number orders after every number and equal to another")
+    let nan = 0.0 / 0.0
+    test.assert(dfcell.compare(DfFloatCell(nan), DfFloatCell(1.0)) == Some(Greater))
+    test.assert(dfcell.compare(DfFloatCell(1.0), DfFloatCell(nan)) == Some(Less))
+    test.assert(dfcell.compare(DfFloatCell(nan), DfFloatCell(nan)) == Some(Equal))
+    test.assert(dfcell.compare(DfFloatCell(1.0), DfFloatCell(2.0)) == Some(Less))
+
+@test
+fn test_key_separates_kinds_and_joins_the_zeros() [io]
+    test.case("an int and a string of the same text do not share a key")
+    test.assert(dfcell.key(DfIntCell(1)) != dfcell.key(DfStrCell("1")))
+
+    test.case("the two zeros of a float share one")
+    test.assert(dfcell.key(DfFloatCell(0.0)) == dfcell.key(DfFloatCell(-0.0)))
+
+    test.case("a truth and the null have keys of their own")
+    test.assert(dfcell.key(DfBoolCell(true)) != dfcell.key(DfBoolCell(false)))
+    test.assert(dfcell.key(DfNullCell) != dfcell.key(DfStrCell("")))
+
+@test
+fn test_a_bool_column_reads_and_casts() [io]
+    test.case("of_cells builds a bool column with a null")
+    match dfcolumn.of_cells("ok", [DfBoolCell(true), DfNullCell], DfBoolKind)
+        Ok(c)  =>
+            test.assert(dfcolumn.null_count(c) == 1)
+            test.assert(dfcolumn.cells_of(c) == [DfBoolCell(true), DfNullCell])
+        Err(e) => test.fail("of_cells failed: ${e.message()}")
+
+    test.case("a truth casts to 1 and 0, and a null stays null")
+    match dfcolumn.cast(flags(), DfIntKind)
+        Ok(c)  => test.assert(dfcolumn.cells_of(c) == [DfIntCell(1), DfNullCell, DfIntCell(0)])
+        Err(e) => test.fail("cast to int failed: ${e.message()}")
+    match dfcolumn.cast(flags(), DfFloatKind)
+        Ok(c)  => test.assert(dfcolumn.cells_of(c) == [DfFloatCell(1.0), DfNullCell, DfFloatCell(0.0)])
+        Err(e) => test.fail("cast to float failed: ${e.message()}")
+
+    test.case("a number has no truth to cast to")
+    match dfcolumn.cast(dfcolumn.ints("n", [1]), DfBoolKind)
+        Ok(_)  => test.fail("an int column cast to bool")
+        Err(e) => test.assert(e == DfKindMismatch(DfBoolKind, DfIntKind))
+
+    test.case("a float with no integer value casts to a null")
+    let odd = dfcolumn.floats("w", [1.5, 1.0 / 0.0, 0.0 / 0.0, -2.9])
+    match dfcolumn.cast(odd, DfIntKind)
+        Ok(c)  => test.assert(dfcolumn.cells_of(c) == [DfIntCell(1), DfNullCell, DfNullCell, DfIntCell(-2)])
+        Err(e) => test.fail("cast to int failed: ${e.message()}")
+
+    test.case("text casts to a truth by parsing it")
+    match dfcolumn.cast(dfcolumn.strings("s", ["true", "no", ""]), DfBoolKind)
+        Ok(c)  => test.assert(dfcolumn.cells_of(c) == [DfBoolCell(true), DfNullCell, DfNullCell])
+        Err(e) => test.fail("cast to bool failed: ${e.message()}")
+
+    test.case("a cast to the same kind is the column")
+    match dfcolumn.cast(flags(), DfBoolKind)
+        Ok(c)  => test.assert(dfcolumn.null_count(c) == 1)
+        Err(e) => test.fail("cast to bool failed: ${e.message()}")
+
+    test.case("a text column of values and nulls keeps its nulls")
+    match dfcolumn.of_cells("s", [DfStrCell("a"), DfNullCell], DfStrKind)
+        Ok(c)  => test.assert(dfcolumn.cells_of(c) == [DfStrCell("a"), DfNullCell])
+        Err(e) => test.fail("of_cells failed: ${e.message()}")
+
+@test
+fn test_the_numeric_refusals_name_what_they_refuse() [io]
+    test.case("to_ints refuses an int column with a null")
+    let gappy = DfColumn { name: "n", cells: DfIntCells([1, 0]), present: [true, false] }
+    match dfcolumn.to_ints(gappy)
+        Ok(_)  => test.fail("an int column with a null converted")
+        Err(e) => test.assert(e == DfNullInNumeric("n", 1))
+
+    test.case("to_floats_or refuses text")
+    match dfcolumn.to_floats_or(dfcolumn.strings("c", ["a"]), 0.0)
+        Ok(_)  => test.fail("a text column converted")
+        Err(e) => test.assert(e == DfKindMismatch(DfFloatKind, DfStrKind))
+
+    test.case("an int matrix is not a column")
+    match ndint.of_list([1, 2, 3, 4], [2, 2])
+        Ok(a)  =>
+            match dfcolumn.of_ints("n", a)
+                Ok(_)  => test.fail("a rank-2 array became a column")
+                Err(e) => test.assert(e.message() == "the array underneath: ${NdRankMismatch(1, 2).message()}")
+        Err(e) => test.fail("of_list failed: ${e.message()}")
+
+    test.case("a sum of truths is a kind mismatch")
+    match dfcolumn.sum(flags())
+        Ok(_)  => test.fail("a bool column had a sum")
+        Err(e) => test.assert(e == DfKindMismatch(DfFloatKind, DfBoolKind))
+
+    test.case("the smallest and the largest truth")
+    match dfcolumn.min(flags())
+        Ok(v)  => test.assert(v == DfBoolCell(false))
+        Err(e) => test.fail("min failed: ${e.message()}")
+
+@test
+fn test_every_refusal_has_a_message() [io]
+    test.case("one sentence per variant")
+    test.assert(DfNoSuchColumn("w").message() == "no column named `w`")
+    test.assert(DfDuplicateColumn("w").message() == "two columns named `w` in one frame")
+    test.assert(DfLengthMismatch(3, 1).message() == "a column of 1 row(s) in a frame of 3")
+    test.assert(DfKindMismatch(DfIntKind, DfStrKind).message() == "a column of kind str where int was needed")
+    test.assert(DfNullInNumeric("w", 2).message() == "`w` has 2 null(s) and no fill was named")
+    test.assert(DfRowOutOfRange(9, 3).message() == "row 9 of a frame with 3 row(s)")
+    test.assert(DfBadRange("rows [2, 1) of a frame of 3").message() == "rows [2, 1) of a frame of 3 describes no frame")
+    test.assert(DfEmptyGroup("mean").message() == "mean of an empty group has no value")
+    test.assert(DfBadMask(3, 1).message() == "a mask over 1 row(s) against a frame of 3")
+    test.assert(DfRaggedRecord(4, 2, 1).message() == "line 4 has 1 field(s) where the header names 2")
+    test.assert(DfArrayFault(NdRankMismatch(1, 2)).message() == "the array underneath: ${NdRankMismatch(1, 2).message()}")
+
+@test
+fn test_frame_edges() [io]
+    let t = dftable.of_columns([dfcolumn.floats("w", [1.0, 2.0, 3.0]), dfcolumn.bools("ok", [true, false, true])])!
+
+    test.case("head and tail keep float and bool columns")
+    test.assert(dftable.to_rows(dftable.head(t, 1)) == [["1.0", "true"]])
+    test.assert(dftable.to_rows(dftable.tail(t, 1)) == [["3.0", "true"]])
+    test.assert(dftable.rows(dftable.tail(t, -4)) == 0)
+
+    test.case("renaming a column that is not there, and onto itself")
+    match dftable.rename(t, "x", "y")
+        Ok(_)  => test.fail("an absent column was renamed")
+        Err(e) => test.assert(e == DfNoSuchColumn("x"))
+    match dftable.rename(t, "w", "w")
+        Ok(s)  => test.assert(dftable.names(s) == ["w", "ok"])
+        Err(e) => test.fail("a rename onto itself failed: ${e.message()}")
+
+    test.case("a column only the bottom frame has")
+    let wider = dftable.with_column(t, dfcolumn.ints("n", [1, 2, 3]))!
+    match dftable.concat_rows(t, wider)
+        Ok(_)  => test.fail("frames of different columns stacked")
+        Err(e) => test.assert(e == DfNoSuchColumn("n"))
+
+    test.case("a column of the same name and another kind")
+    let other = dftable.of_columns([dfcolumn.ints("w", [1]), dfcolumn.bools("ok", [true])])!
+    match dftable.concat_rows(t, other)
+        Ok(_)  => test.fail("a float and an int column stacked")
+        Err(e) => test.assert(e == DfKindMismatch(DfFloatKind, DfIntKind))
+
+    test.case("the empty frame takes a column of any length")
+    let one = dftable.with_column(dftable.empty(), dfcolumn.ints("n", [1, 2]))!
+    test.assert(dftable.rows(one) == 2)
+
+@test
+fn test_group_edges() [io]
+    let t = dftable.of_columns([dfcolumn.strings("c", ["a", "b"]), dfcolumn.bools("ok", [true, true])])!
+    let g = dfgroup.by(t, ["c"])!
+
+    test.case("a mean of truths is a kind mismatch")
+    match dfgroup.agg(g, t, DfAggSpec { column: "ok", how: DfMean, into: "m" })
+        Ok(_)  => test.fail("a bool column had a mean")
+        Err(e) => test.assert(e == DfKindMismatch(DfFloatKind, DfBoolKind))
+
+    test.case("a grouping is refused over a frame of another length")
+    match dfgroup.frame_of(g, dftable.head(t, 1), 0)
+        Ok(_)  => test.fail("a grouping of two rows read a frame of one")
+        Err(e) => test.assert(e == DfLengthMismatch(2, 1))
+
+@test
+fn test_join_edges_carry_every_kind_through_a_left_join() [io]
+    let l = dftable.of_columns([dfcolumn.ints("id", [1, 2])])!
+    let r = dftable.of_columns([dfcolumn.ints("id", [1]), dfcolumn.floats("w", [0.5]),
+                                dfcolumn.bools("ok", [true]), dfcolumn.strings("s", ["x"])])!
+
+    test.case("an unmatched left row is null in every right column")
+    match dfjoin.join(l, r, "id", DfLeftJoin)
+        Ok(j)  => test.assert(dftable.to_rows(j) == [["1", "0.5", "true", "x"], ["2", "", "", ""]])
+        Err(e) => test.fail("a left join failed: ${e.message()}")
+
+@test
+fn test_summary_edges() [io]
+    test.case("a column with nothing present has no minimum and no mean")
+    match dfsummary.of_column(empty_floats())
+        Ok(s)  =>
+            test.assert(s.min == None)
+            test.assert(s.max == None)
+            test.assert(s.mean == None)
+        Err(e) => test.fail("of_column failed: ${e.message()}")
+
+    test.case("a quantile of nothing has no value")
+    match dfsummary.quantile(empty_floats(), 0.5)
+        Ok(_)  => test.fail("a quantile of an all-null column answered")
+        Err(e) => test.assert(e == DfEmptyGroup("quantile"))
+
+    test.case("describe writes a null where a column has no minimum")
+    let t = dftable.of_columns([empty_floats()])!
+    let d = dfsummary.describe(t)!
+    test.assert(dfcolumn.null_count(dftable.column(d, "min")!) == 1)
+
+@test
+fn test_csv_refusals() [io]
+    test.case("a kind list of the wrong length")
+    match dfcsv.of_records(Header { names: ["n", "c"] }, [], [DfIntKind])
+        Ok(_)  => test.fail("one kind loaded two columns")
+        Err(e) => test.assert(e == DfBadRange("1 kind(s) for 2 column(s)"))
+
+    test.case("a record of the wrong width names its line")
+    match dfcsv.of_records(Header { names: ["n", "c"] }, [Row { fields: ["1"], line: 7, index: 5 }],
+                           [DfIntKind, DfStrKind])
+        Ok(_)  => test.fail("a ragged record loaded")
+        Err(e) => test.assert(e == DfRaggedRecord(7, 2, 1))
+    match dfcsv.infer_kinds(Header { names: ["n"] }, [Row { fields: ["1", "2"], line: 3, index: 1 }])
+        Ok(_)  => test.fail("a ragged record was inferred")
+        Err(e) => test.assert(e == DfRaggedRecord(3, 1, 2))
+
+// Read a document with csv-nv and load it with its kinds inferred.
+fn load(text: Str) -> Result<DfTable, DfFault>
+    let (r, first) = reader.feed_str(reader.reader(dialect.rfc4180()), text)
+    var rows = first[:]
+    match reader.finish(r)
+        Ok(rest) => list.append(rows, rest)
+        Err(_)   =>
+            return Err(DfBadRange("the document"))
+    let Some(h) = reader.header_row(r) else return Err(DfBadRange("the header"))
+    dfcsv.of_records_inferred(h, rows)
+
+// Write a frame out with csv-nv.
+fn write(t: DfTable) -> Str
+    var fields: [[Str]] = []
+    for rec in dfcsv.to_records(t)
+        list.push(fields, rec.fields[:])
+    let (w, head) = writer.write_header(writer.writer(dialect.rfc4180()), dfcsv.header_of(t))
+    let (_, body) = writer.write_rows(w, fields)
+    bytes.to_str(bytes.concat([head, body]))
+
+@test
+fn test_a_csv_document_round_trips_through_a_frame() [io]
+    let text = "id,city,w,ok,note\r\n1,oslo,2.5,true,\"a, b\"\r\n2,,1.0,,\r\n3,bergen,,false,x\r\n"
+    match load(text)
+        Ok(t)  =>
+            test.case("the inferred kinds are the ones the text holds")
+            var kinds: [DfKind] = []
+            for c in t.columns
+                list.push(kinds, dfcolumn.kind(c))
+            test.assert(kinds == [DfIntKind, DfStrKind, DfFloatKind, DfBoolKind, DfStrKind])
+
+            test.case("an empty field is a null except in text")
+            test.assert(dfcolumn.null_count(dftable.column(t, "w")!) == 1)
+            test.assert(dfcolumn.null_count(dftable.column(t, "note")!) == 0)
+
+            test.case("every kind, with empty fields, comes back byte for byte")
+            test.assert(write(t) == text)
+
+        Err(e) => test.fail("the load failed: ${e.message()}")

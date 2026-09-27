@@ -1,13 +1,8 @@
 // dfcolumn_tests.nv — the API suite for one column and the null rule.
 //
-// RED ON PURPOSE: every body is a `todo()`, so each assertion reaches
-// `not implemented: dataframe-nv.dfcolumn.<fn>`.
-//
-// The cases worth reading before the rest are the null ones: an
-// aggregation skips nulls, a numeric conversion refuses them, and a
-// mask reads them as false.  Those three are the rule the whole
-// package is written to, and they are stated in `dfcolumn`'s module
-// comment.
+// The null cases come first in importance: an aggregation skips nulls,
+// a numeric conversion refuses them, and a mask reads them as false.
+// `dfcolumn`'s module comment states the rule.
 
 use std.test
 use dfcolumn
@@ -155,7 +150,7 @@ fn test_to_floats_refuses_a_null_and_to_floats_or_fills_it() [io]
         Ok(a)  => test.assert(ndfloat.sum(a) == 6.0)
         Err(e) => test.fail("an int column failed to widen: ${e.message()}")
 
-    test.case("a null STOPS the conversion — it does not become a NaN")
+    test.case("a null stops the conversion and does not become a NaN")
     match dfcolumn.to_floats(gappy())
         Ok(_)  => test.fail("a column with a null converted silently")
         Err(e) =>
@@ -197,7 +192,7 @@ fn test_mask_reads_a_null_as_false_and_present_mask_finds_the_values() [io]
         Ok(m)  => test.assert(ndbool.count(m) == 2)
         Err(e) => test.fail("mask failed: ${e.message()}")
 
-    test.case("a null in a predicate column is FALSE — unknown is not keep")
+    test.case("a null in a predicate column reads as false")
     let nullable = DfColumn { name: "ok", cells: DfBoolCells([true, true, true]), present: [true, false, true] }
     match dfcolumn.mask(nullable)
         Ok(m)  => test.assert(ndbool.count(m) == 2)
@@ -257,7 +252,7 @@ fn test_cast_moves_between_kinds_and_says_when_it_can_introduce_nulls() [io]
         Ok(c)  => test.assert(dfcell.kind_name(dfcolumn.kind(c)) == "str")
         Err(e) => test.fail("cast to str failed: ${e.message()}")
 
-    test.case("text that does not parse becomes a NULL — the one cast that can")
+    test.case("text that does not parse becomes a null")
     match dfcolumn.cast(cities(), DfIntKind)
         Ok(c)  => test.assert(dfcolumn.null_count(c) == 3)
         Err(e) => test.fail("cast from str failed: ${e.message()}")

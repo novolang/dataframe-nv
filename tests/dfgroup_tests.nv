@@ -1,11 +1,7 @@
 // dfgroup_tests.nv — the API suite for group-by.
 //
-// RED ON PURPOSE: every body is a `todo()`, so each assertion reaches
-// `not implemented: dataframe-nv.dfgroup.<fn>`.
-//
-// The two cases worth reading before the rest: groups come out in
-// FIRST-APPEARANCE order, and a null key is a group of its own — so
-// the group sizes always sum to the frame's row count.
+// Groups come out in first-appearance order, and a null key is a group
+// of its own, so the group sizes sum to the frame's row count.
 
 use std.test
 use dfgroup

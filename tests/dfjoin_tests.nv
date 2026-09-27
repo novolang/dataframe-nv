@@ -1,11 +1,7 @@
 // dfjoin_tests.nv — the API suite for a join.
 //
-// RED ON PURPOSE: every body is a `todo()`, so each assertion reaches
-// `not implemented: dataframe-nv.dfjoin.<fn>`.
-//
-// The case worth reading before the rest is the null key: it matches
-// NOTHING, not even another null.  That is SQL's rule and this
-// package's, and it is what keeps a join from inventing rows.
+// A null key matches nothing, not even another null.  That is SQL's
+// rule and this package's.
 
 use std.test
 use dfjoin
@@ -61,7 +57,7 @@ fn test_a_left_join_keeps_every_left_row() [io]
         Ok(j)  => test.assert(dftable.rows(j) == 2)
         Err(e) => test.fail("a left join failed: ${e.message()}")
 
-    test.case("the unmatched row's right columns are NULL, not zero")
+    test.case("the unmatched row's right columns are null, not zero")
     match dfjoin.join(left(), right(), "id", DfLeftJoin)
         Ok(j)  =>
             match dftable.column(j, "value")

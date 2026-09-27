@@ -1,11 +1,7 @@
 // dftable_tests.nv — the API suite for a frame.
 //
-// RED ON PURPOSE: every body is a `todo()`, so each assertion reaches
-// `not implemented: dataframe-nv.dftable.<fn>`.
-//
-// What is asserted is the INVARIANT and the two rules that follow from
-// it: every column the same length, no two names the same, and a row
-// is a position rather than a label.
+// Every column has the same length, no two names are the same, and a
+// row is a position rather than a label.
 
 use std.test
 use dftable
