@@ -5,6 +5,58 @@ All notable changes to dataframe-nv are recorded here. The format is
 package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 with the pre-1.0 rule that a breaking change bumps the MINOR number.
 
+## 0.1.0 — 2026-09-27
+
+The first implementation of the interface published as 0.0.1: columns
+with a null mask, frames, a stable multi-key sort, group-by with five
+aggregations, the inner and the left join, describe, and the bridges to
+ndarray-nv and csv-nv.  It requires novo 0.13.0, ndarray-nv `^0.1.4`
+and csv-nv `^0.2.1`.
+
+### Breaking changes
+
+- `DfFault` has an eleventh variant, `DfRaggedRecord(line, want, got)`.
+  `dfcsv.of_records`, `of_records_inferred` and `infer_kinds` refuse a
+  record of the wrong width with it, carrying the line the record
+  started on, where the interface named `DfLengthMismatch`, which has
+  no place for a line.  A `match` over `DfFault` needs the new arm.
+- `dfcolumn.of_floats` and `of_ints` refuse an array that is not rank 1
+  with `DfArrayFault(NdRankMismatch(1, rank))`, not `DfKindMismatch`:
+  the array's kind is right and its rank is not.
+
+### Added
+
+- `dfcell.key`, the text two cells share exactly when they hold the
+  same value.  Group-by and join match on it, and a caller grouping by
+  hand can use the same rule.
+
+### Behaviour the interface left open
+
+- `dfcell.render` writes a float with a point: `1.0`, not `1`.  A
+  Float column written to CSV and read back with its kinds inferred is
+  a Float column again.
+- Floats order by the total order of SPEC section 13.6, with every
+  not-a-number after every number.  In a key, the two zeros of a float
+  are one value, and every not-a-number is one value.
+- `dfcolumn.with_nulls` keeps a null that is already there: the mask
+  can add nulls and cannot remove them.
+- `dfcolumn.cast` turns a float with no integer value, an infinity or a
+  not-a-number, into a null when it truncates to Int, and refuses a
+  cast from Int or Float to Bool with `DfKindMismatch`.
+- `dfgroup.agg`, `aggregate` and `frame_of` refuse a frame whose row
+  count is not the grouped frame's, with `DfLengthMismatch`.
+- A join suffix that collides again is `DfDuplicateColumn`.
+
+### Tests
+
+- The group-by aggregations, both joins and a two-key sort are checked
+  against SQLite, and the summary statistics against Python's
+  `statistics` module, over three seeded frames with nulls in every
+  column (`tools/differential.py`).
+- A CSV document read with csv-nv, loaded with its kinds inferred and
+  written back comes out byte for byte.
+- Line coverage over `src/` is 100%, measured by `tests/coverage.sh`.
+
 ## 0.0.4 — 2026-09-25
 
 The package builds with novo 0.11.  Every body is still `todo()`.

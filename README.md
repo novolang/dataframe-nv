@@ -11,12 +11,6 @@ operations. Numeric columns convert to and from arrays of
 [csv-nv](https://novo-lang.org/packages/csv-nv) records convert to and
 from frames.
 
-**Status: NOT IMPLEMENTED — interface only.** Every function is declared
-with its full signature, but every body is a `todo()` that panics when
-called. The package is published so its design can be reviewed and
-depended on before it is implemented. Version 0.1.0 will be the first
-working release.
-
 ## What a frame, a column and a null are
 
 A **column** is a name, a list of values all of one type, and a
@@ -82,26 +76,18 @@ fn main() [io]
                         Ok(out) => println("${dfgroup.count(g)} groups, ${dftable.rows(out)} rows out")
 ```
 
-Build and test with `novo pkg build` and `novo test`. Today `novo test`
-fails on purpose: every test reaches a
-`not implemented: dataframe-nv.<module>.<fn>` panic. The tests are the
-specification the implementation will have to satisfy.
-
-`novo test --isolate` gives each test its own process, so the output
-names the function each one stopped at.
-
 ## What the package contains
 
 | Module | Contents |
 | --- | --- |
-| `dfcell` | The four element kinds, one cell, and what can be asked of one: its kind, its text, parsing it from text, inferring a kind from a list of texts, and comparing two. |
+| `dfcell` | The four element kinds, one cell, and what can be asked of one: its kind, its text, parsing it from text, inferring a kind from a list of texts, comparing two, and the key two equal cells share. |
 | `dfcolumn` | The column: the four constructors, nulls, the accessors, selection by mask and by position, the conversions to and from ndarray-nv arrays, casting, and the six per-column aggregates. |
 | `dftable` | The frame: construction from columns and from rows of text, the shape, column lookup, select and drop, `with_column` and rename, `head`, `tail` and `slice`, filter and take, a sort by several keys, the row and text views, concatenation, and dropping rows with nulls. |
 | `dfgroup` | Group-by: the groups, their keys and sizes, the rows of one group, the five aggregations, and applying several of them at once. |
 | `dfjoin` | The inner and left joins, on one column name or on two different ones, with a suffix rule for colliding names, and the matching positions on their own. |
 | `dfsummary` | One column summarised, `describe` over a whole frame, a quantile, and the null counts per column. |
 | `dfcsv` | Turning csv-nv records into a frame and back, with the element kinds given or inferred. |
-| `dffault` | Every reason an operation refuses, as one enum with ten variants. |
+| `dffault` | Every reason an operation refuses, as one enum with eleven variants. |
 
 ## How to choose an entry point
 
@@ -112,8 +98,8 @@ a database cursor, a JSON array of arrays or a fixed-width reader.
 
 **Use `dfcsv` rather than `dftable.of_rows` for a CSV file.** It keeps
 the types csv-nv already knows, and a record of the wrong width is
-reported with the line number it came from. A bare list of texts has
-thrown that number away.
+refused as `DfRaggedRecord` with the line it started on. A bare list of
+texts has thrown that number away.
 
 **Arithmetic happens in ndarray-nv, not here.** The path a filter takes
 is four calls.
@@ -174,8 +160,16 @@ The rest:
     suffix.** `dfjoin.join_with_suffix` takes it.
 13. **Every failure carries the numbers or the name.**
     `DfNoSuchColumn` names the column, `DfRowOutOfRange` carries the row
-    and the row count, and `DfArrayFault` carries the ndarray-nv failure
-    underneath it unchanged.
+    and the row count, `DfRaggedRecord` carries the line of a CSV
+    record, and `DfArrayFault` carries the ndarray-nv failure underneath
+    it unchanged.
+14. **A float is written with a point.** `dfcell.render` writes the
+    shortest text that reads back as the same number, and adds `.0` when
+    that text has no point or exponent. So a Float column written to CSV
+    and read back with its kinds inferred is a Float column again.
+15. **Group-by and join match values through `dfcell.key`.** Two cells
+    match when they are of one kind and hold the same value. The two
+    zeros of a float are the same value, and so is every not-a-number.
 
 ## What is not included
 
@@ -216,54 +210,34 @@ The rest:
 ## Tests
 
 ```bash
-novo test tests/dfcell_tests.nv        #  7 tests: the cell and the kind inference
-novo test tests/dfcolumn_tests.nv      # 13 tests: the column, its nulls and its conversions
-novo test tests/dftable_tests.nv       # 12 tests: the frame and its row operations
-novo test tests/dfgroup_tests.nv       #  7 tests: group-by and the five aggregations
-novo test tests/dfjoin_tests.nv        #  7 tests: the two joins and the null key rule
-novo test tests/dfsummary_tests.nv     #  9 tests: describe and the quantiles
+novo test tests/dfcell_tests.nv          #  6 tests: the cell and the kind inference
+novo test tests/dfcolumn_tests.nv        # 13 tests: the column, its nulls and its conversions
+novo test tests/dftable_tests.nv         # 12 tests: the frame and its row operations
+novo test tests/dfgroup_tests.nv         #  7 tests: group-by and the five aggregations
+novo test tests/dfjoin_tests.nv          #  7 tests: the two joins and the null key rule
+novo test tests/dfsummary_tests.nv       #  9 tests: describe, the quantiles and the CSV bridge
+novo test tests/differential_tests.nv    # 18 tests: against SQLite and Python's statistics
+novo test tests/edges_tests.nv           # 11 tests: the refusals, the rarer kinds, a CSV round trip
+bash tests/coverage.sh                   # line coverage over src/, merged across the suites
 ```
 
-polars is the reference for the shape and pandas for the summary
-numbers. polars's own test suite is the oracle the implementation will
-be run against, with pandas's `describe` output as the comparison for
-the mean, the sample standard deviation and the quartiles.
+The oracle is two implementations from Python's standard library.
+`tools/differential.py` draws three seeded frames of 36 rows with nulls
+in every column, asks SQLite for the group-by aggregations, the inner
+and left joins and a two-key sort, and asks the `statistics` module for
+the mean, the sample standard deviation and the quartiles. It writes
+the answers into `tests/differential_tests.nv`. SQL's null rules are
+this package's: an aggregate skips a null, a null join key matches
+nothing, a GROUP BY puts the null keys in one group, and every sort
+key is written `NULLS LAST`. The quartiles use the `inclusive` method,
+which is the linear interpolation numpy and pandas use by default.
 
-The suite asserts each of the five parts of the null rule against the
-case that would break it: an aggregation over a column with nulls, a
-join whose keys are null on both sides, a group whose key is null, a
+The API suites assert each of the five parts of the null rule against
+the case that would break it: an aggregation over a column with nulls,
+a join whose keys are null on both sides, a group whose key is null, a
 sort in both directions, and a numeric conversion of a column with a
-null in it. It also asserts that group sizes sum to the row count, that
-groups appear in first-appearance order, and that `describe` is defined
-for a text column.
-
-The tests compile today and fail at run, each on the
-`not implemented: dataframe-nv.<module>.<fn>` panic that is its body.
-That is the expected state of an interface release. They turn green one
-at a time as bodies land.
-
-## Implementation status
-
-| Item | Implemented |
-| --- | --- |
-| `dfcell.DfKind`, `.DfCell`, `dfcolumn.DfColumn`, `.DfCells` | declared |
-| `dftable.DfTable`, `.DfSortKey`, `dfgroup.DfGroups`, `.DfAgg`, `.DfAggSpec` | declared |
-| `dfjoin.DfJoinKind`, `dfsummary.DfSummary`, `dffault.DfFault` | declared |
-| `dfcell.kind_of`, `.kind_name`, `.render`, `.parse`, `.infer`, `.compare` | no |
-| `dfcolumn.floats`, `.ints`, `.bools`, `.strings`, `.of_cells`, `.with_nulls` | no |
-| `dfcolumn.name`, `.rename`, `.kind`, `.len`, `.null_count`, `.is_null`, `.cell`, `.cells_of` | no |
-| `dfcolumn.filter`, `.take`, `.cast` | no |
-| `dfcolumn.to_floats`, `.to_floats_or`, `.to_ints`, `.mask`, `.present_mask`, `.of_floats`, `.of_ints` | no |
-| `dfcolumn.count`, `.sum`, `.mean`, `.min`, `.max`, `.unique_count` | no |
-| `dftable.of_columns`, `.empty`, `.of_rows`, `.rows`, `.width`, `.names`, `.column`, `.has` | no |
-| `dftable.select`, `.drop`, `.with_column`, `.rename`, `.head`, `.tail`, `.slice` | no |
-| `dftable.filter`, `.take`, `.sort`, `.sort_positions` | no |
-| `dftable.row_cells`, `.to_rows`, `.concat_rows`, `.drop_nulls` | no |
-| `dfgroup.by`, `.count`, `.keys`, `.sizes`, `.positions`, `.frame_of`, `.agg`, `.aggregate` | no |
-| `dfjoin.join`, `.join_on`, `.join_with_suffix`, `.join_positions` | no |
-| `dfsummary.of_column`, `.describe`, `.quantile`, `.null_counts` | no |
-| `dfcsv.of_records`, `.of_records_inferred`, `.infer_kinds`, `.to_records`, `.header_of` | no |
-| `dffault`'s ten variants and its `Error` implementation | no |
+null in it. `tests/edges_tests.nv` reads a CSV document with csv-nv,
+loads it with its kinds inferred, and writes it back byte for byte.
 
 ## Licence
 
