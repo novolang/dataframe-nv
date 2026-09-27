@@ -5,13 +5,14 @@ All notable changes to dataframe-nv are recorded here. The format is
 package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 with the pre-1.0 rule that a breaking change bumps the MINOR number.
 
-## 0.1.0 — 2026-09-27
+## 0.1.0 — 2026-09-28
 
 The first implementation of the interface published as 0.0.1: columns
 with a null mask, frames, a stable multi-key sort, group-by with five
 aggregations, the inner and the left join, describe, and the bridges to
-ndarray-nv and csv-nv.  It requires novo 0.13.0, ndarray-nv `^0.1.4`
-and csv-nv `^0.2.1`.
+ndarray-nv and csv-nv.  It requires novo 0.14.0, ndarray-nv `^0.1.4`
+and csv-nv `^0.2.1`.  The bodies target novo 0.14.0 and carry no
+workaround for a compiler defect.
 
 ### Breaking changes
 

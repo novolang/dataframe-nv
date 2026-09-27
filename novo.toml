@@ -21,7 +21,7 @@ category    = "science"
 tags        = ["dataframe", "polars", "pandas", "columns", "groupby", "science"]
 repository  = "https://github.com/novolang/dataframe-nv"
 maintainers = ["novo-lang"]
-novo        = ">= 0.13.0"
+novo        = ">= 0.14.0"
 
 # A library: no `main`, so `novo pkg build` type-checks and
 # effect-checks every module under `src/` and writes no binary.
