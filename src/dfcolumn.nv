@@ -469,10 +469,7 @@ pub fn mask(c: DfColumn) -> Result<NdMask, DfFault>
 //     println("${ndbool.count(dfcolumn.present_mask(dfcolumn.ints("n", [1, 2])))}")
 // ```
 pub fn present_mask(c: DfColumn) -> NdMask
-    // The mask is bound before it is answered.  On novo 0.13.0 a `!` in
-    // the last expression of a function answers a wrong value.
-    let m = bool_array(c.present)!
-    m
+    bool_array(c.present)!
 
 // A Float column over this rank-1 array, with no nulls.
 //
