@@ -5,7 +5,7 @@ All notable changes to dataframe-nv are recorded here. The format is
 package follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 with the pre-1.0 rule that a breaking change bumps the MINOR number.
 
-## 0.1.0 — 2026-09-28
+## 0.1.0 — 2026-09-27
 
 The first implementation of the interface published as 0.0.1: columns
 with a null mask, frames, a stable multi-key sort, group-by with five
